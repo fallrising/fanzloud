@@ -47,6 +47,9 @@ The configured remote is `git@github.com:fallrising/fanzloud.git`; `origin/main`
 - T010 domain implementation: strong UUID IDs, validated `WorkspacePath`, `EventSeq`, typed
   errors, serde validation, and compile-fail coverage. Local executable acceptance passed.
 - T010 hosted CI run `30262687153` passed all workflow gates.
+- T002 login broker contract draft records the trusted `CODEX_HOME` boundary and an explicit
+  `[TD-GAP]` for pinned-CLI device-code output and exit semantics; no production login code was
+  written while that gap remains.
 
 ## Verified Official Codex Surface
 
@@ -79,13 +82,16 @@ Codex Cloud environment ID and branch are administrator configuration, not brows
 
 1. T001 remains `verifying` until its fresh document-first acceptance review returns a report.
 2. T010 remains `verifying` for the same acceptance-process reason; its executable checks pass.
-3. No implementation changes are currently uncommitted; only fresh acceptance review remains.
+3. T002 is `blocked` on T001/T010 acceptance and the device-code output/exit-semantics `[TD-GAP]`.
+4. No implementation changes are currently uncommitted; only fresh acceptance review and T002
+   contract resolution remain.
 
 ## Next Session
 
 1. Obtain fresh read-only Claude acceptance reports for T001 and T010, then mark accepted if clear.
-2. Write T002/T003 specifications and tests after T001 and T010 are accepted.
-3. Implement:
+2. Resolve the T002 `[TD-GAP]` with a pinned CLI fixture or an ADR/specification decision.
+3. Write T002/T003 tests and implementation after their contracts are Ready.
+4. Implement:
    - T002 Codex login broker
    - T003 pinned Codex Cloud CLI adapter
    - T004 cloud task orchestrator
