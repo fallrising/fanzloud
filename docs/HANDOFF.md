@@ -17,13 +17,17 @@ Branch: `main`
 Local commits:
 
 ```text
+f9f3e2d docs: save development handoff
 9d45850 docs: prioritize personal Codex cloud BYOS slice
 d605028 docs: record T000 verification evidence
 76f72b3 chore: bootstrap codebox workspace
 ```
 
-The configured remote is `git@github.com:fallrising/fanzloud.git`. Nothing has been pushed. The local
-branch reports `origin/main [gone]`.
+The pushed remote state is `f9f3e2d` (`main -> origin/main`). The current T000/T001/T010
+documentation and T010 implementation changes are uncommitted and have not been pushed.
+
+The configured remote is `git@github.com:fallrising/fanzloud.git`; `origin/main` points to
+`f9f3e2d`.
 
 ## Completed
 
@@ -32,13 +36,15 @@ branch reports `origin/main [gone]`.
 - Rust `1.97.1` and `cargo-deny 0.19.4` pins.
 - Formatting, Clippy, test, build, dependency-policy, and CI configuration.
 - All five T000 commands passed against clean commit `76f72b3`.
-- Conditional T000 acceptance report; hosted GitHub CI remains pending.
+- Hosted GitHub Actions run `30260756940` passed all five T000 commands; T000 is accepted.
 - ADR-0001 infrastructure-only task exception.
-- Proposed ADR-0002 personal BYOS Codex P0.
+- Accepted ADR-0002 personal BYOS Codex P0.
 - P0 Contract Unit inventory and T001–T007 task graph.
 - Claude reviewed ADR-0002 twice. The initial local-exec design was rejected because Codex's local
   sandbox must not be relied on to prevent credential reads. The revised Codex Cloud design passed
   content review.
+- T010 domain implementation: strong UUID IDs, validated `WorkspacePath`, `EventSeq`, typed
+  errors, serde validation, and compile-fail coverage. Local executable acceptance passed.
 
 ## Verified Official Codex Surface
 
@@ -69,20 +75,16 @@ Codex Cloud environment ID and branch are administrator configuration, not brows
 
 ## Current Blockers
 
-1. T000 is still `verifying`, not `accepted`, because no hosted GitHub Actions run exists.
-2. T001 depends on T000 and therefore remains `blocked`.
-3. ADR-0002 remains `proposed` until T001 can be accepted.
-4. Push is an irreversible external action under TD §0.4 and has not been authorized.
+1. T001 remains `verifying` until its fresh document-first acceptance review returns a report.
+2. T010 remains `verifying` for the same acceptance-process reason; its executable checks pass.
+3. The current T010/docs changes are uncommitted and unpushed.
 
 ## Next Session
 
-1. Ask for explicit authorization to push `main` to `origin/main`.
-2. Push and monitor GitHub Actions.
-3. Record the CI run evidence; finalize T000 acceptance.
-4. Finalize ADR-0002 and produce fresh T001 acceptance.
-5. Implement and accept T010 strong IDs and errors.
-6. Write T002/T003 specifications and tests.
-7. Implement:
+1. Obtain fresh read-only Claude acceptance reports for T001 and T010, then mark accepted if clear.
+2. Ask for authorization before pushing the current uncommitted changes.
+3. Write T002/T003 specifications and tests after T001 and T010 are accepted.
+4. Implement:
    - T002 Codex login broker
    - T003 pinned Codex Cloud CLI adapter
    - T004 cloud task orchestrator
@@ -102,4 +104,3 @@ cargo test --workspace --all-targets --all-features
 cargo build --workspace --bins --all-features
 cargo deny check
 ```
-

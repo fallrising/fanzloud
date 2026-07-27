@@ -1,7 +1,7 @@
 ---
 id: ADR-0002
 title: Personal BYOS Codex P0
-status: proposed
+status: accepted
 date: 2026-07-27
 deciders: [project]
 ---
@@ -106,6 +106,13 @@ Check Codex login
 → watch normalized task status
 → view the final provider-generated diff
 ```
+
+## Review evidence
+
+Claude reviewed this ADR twice on 2026-07-27. The first review rejected the local-execution
+design because Codex's local sandbox could not be treated as a credential-read boundary. The
+revised provider-managed Codex Cloud design passed the correctness, feasibility, security, and
+scope review. T000's prerequisite hosted CI subsequently passed in run 30260756940.
 
 # Consequences
 
