@@ -155,7 +155,7 @@ The first usable release is accepted when this scenario works end to end:
 
 | Phase | Goal | Required result |
 |---|---|---|
-| P0 — Baseline | Establish UX and event baselines quickly | Controlled external CLI/ACP agent, minimal web, private self-hosting, user-owned API credentials |
+| P0 — Personal BYOS | Operate the owner's Codex subscription through a private Codebox web control layer | Pinned Codex Cloud CLI, minimal web, private self-hosting, operator-owned credentials |
 | P1 — MVP | Complete real coding tasks with a native core | Rust native agent, SQLite event store, Docker/runsc sandbox, approvals, diff, replay, recovery, cost limits |
 | P2 — Team | Support sustained team use | OIDC, GitHub App, PostgreSQL, multi-node execution, MCP, ACP registry, quotas, persistent workspaces, warm pools |
 | P3 — Platform | Support public multi-tenancy or enterprise deployment | Firecracker/Kata, workflows, multi-agent orchestration, policy-as-code, billing, data residency, enterprise governance |
@@ -182,11 +182,29 @@ P1 does not include:
 A wrapped external agent may use only:
 
 - A user-owned API key
+- An operator-owned subscription authenticated through the provider's official CLI flow, when the
+  deployment satisfies ADR-0002
 - An officially supported enterprise gateway
 - An officially supported cloud-provider identity
 - Private self-hosted credentials
 
-Consumer subscription sessions or shared OAuth quota MUST NOT be repackaged as a third-party product capability.
+Consumer subscription sessions or shared OAuth quota MUST NOT be pooled, shared, resold, or
+repackaged as a third-party product capability. P0 personal BYOS is limited to a private,
+single-operator deployment in which the operator authenticates their own account and remains the
+consumer of the provider service.
+
+## 1.7 P0 personal BYOS acceptance outcome
+
+The P0 Codex slice is accepted when this scenario works end to end:
+
+> From a privately authenticated browser, the operator submits a prompt for an
+> administrator-configured Codex Cloud environment. Codebox submits a task through the pinned
+> official Codex CLI using the operator's own ChatGPT/Codex subscription, polls and streams
+> normalized status, displays the final diff produced by the OpenAI-managed isolated environment,
+> and never exposes or copies subscription credentials into repository-controlled execution.
+
+P0 does not claim multi-user or public SaaS support, private Git credentials, arbitrary repository
+URLs, interactive tool approvals, automatic Git push, or crash-durable replay.
 
 ---
 
@@ -208,6 +226,9 @@ flowchart LR
 
         AB --> NA[Native Rust Agent]
         AB --> EA[ACP / Process Adapter]
+        AB --> CA[Codex Cloud Adapter, P0]
+        CA --> CR[Trusted Credential Runner]
+        CR --> CC[Codex Cloud API / Managed Sandbox]
         NA --> PG[Provider Gateway]
         NA --> TD[Tool Dispatcher]
         PG --> LLM[Model APIs]
@@ -255,6 +276,19 @@ Owns:
 
 MUST NOT parse prompts or call a model provider.
 
+### Trusted agent runner
+
+P0 introduces a credential-bearing agent-runner domain governed by ADR-0002. It owns:
+
+- A pinned official Codex CLI used only to submit, inspect, and retrieve Codex Cloud tasks
+- An operator-scoped credential directory outside workspaces
+- Version validation, task-status normalization, and output limits
+
+The agent runner is trusted platform infrastructure and MUST NOT execute repository-controlled tool
+commands. Repository checkout and agent commands run in the provider-managed Codex Cloud
+environment. Credential material MUST NOT be returned through APIs, persisted in events or
+artifacts, copied into repositories, or shared between operators.
+
 ### boxd
 
 A minimal static Rust binary inside the sandbox.
@@ -274,12 +308,12 @@ MUST NOT receive provider keys, arbitrary host paths, the Docker socket, or syst
 | ID | Invariant |
 |---|---|
 | INV-001 | A model cannot directly access the host or container runtime. |
-| INV-002 | Every state-changing tool call passes through the Policy Engine before execution. |
+| INV-002 | Every Codebox-executed state-changing tool call passes through the Policy Engine before execution; ADR-approved provider-managed agents are authorized at the turn/environment boundary and execute no tools on Codebox hosts. |
 | INV-003 | Domain event sequence numbers are strictly increasing within a session stream. |
 | INV-004 | A session has at most one mutating turn at a time. |
 | INV-005 | A `tool_call_id` cannot succeed more than once. |
 | INV-006 | A non-idempotent side effect in `OutcomeUnknown` is never retried automatically. |
-| INV-007 | Provider secrets never leave the trusted control plane. |
+| INV-007 | Provider secrets exist only in the trusted control plane or an ADR-approved, dedicated trusted credential runner; they never enter Codebox or provider repository/tool environments. |
 | INV-008 | Repository instructions cannot alter platform policy or elevate capability. |
 | INV-009 | Every sandbox has a lease, heartbeat, TTL, and resource limits. |
 | INV-010 | Every approval records actor, scope, time, decision, and reason. |
@@ -805,6 +839,7 @@ Recommended progression:
 | Malicious MCP or external tool | Registry allowlist, pinned version/hash, per-tool policy |
 | Cross-session access | Separate volume, UID, sandbox, and artifact namespace |
 | Duplicate side effect after restart | Command receipt, tool ledger, operation ID, `OutcomeUnknown` |
+| Subscription credential exposed to repository-controlled execution | P0 credential runner submits only provider-managed tasks; canary redaction and no-local-execution tests |
 
 ## 6.5 Reconciliation
 
@@ -1288,6 +1323,8 @@ Consider and explicitly mark applicable or not applicable:
 | P11 | Secret reaches prompt, log, or artifact | CU-CTX-01 / CU-ART-01 | `regression_secret_redacted` |
 | P12 | Metadata endpoint SSRF | CU-NODE-01 | `regression_metadata_ip_blocked` |
 | P13 | Output truncation stops draining and deadlocks | CU-SBX-02 | `regression_drains_after_truncation` |
+| P14 | P0 credential runner launches repository-controlled code or forwards credential state | CU-AUTH-P0-02 / CU-CLOUD-P0-01 | `regression_cloud_runner_never_executes_repository_code` |
+| P15 | Interrupted cloud submission is blindly retried | CU-AGT-P0-02 / CU-CLOUD-P0-01 | `regression_unknown_cloud_submit_reconciles_before_retry` |
 
 Adding a new known pitfall to the design requires adding a named regression test in the same change.
 
@@ -1523,6 +1560,16 @@ This is the initial P1 contract inventory. The LLM MAY add CUs when a public bou
 
 | CU | Boundary | Module | Archetype | Atomicity | Key invariants |
 |---|---|---|---|---|---|
+| CU-AUTH-P0-01 | Official CLI device-login lifecycle | agent-codex | D+F | E2 | INV-007, INV-010 |
+| CU-AUTH-P0-02 | Credential scope lease and isolation | secret-store/agent-codex | B+E | E1 | INV-007 |
+| CU-AGT-P0-01 | Codex Cloud CLI output decoder | agent-codex | D+F | E0 | Redaction, bounded output |
+| CU-AGT-P0-02 | Codex Cloud task lifecycle | agent-codex | C+D | E2 | INV-005, INV-006, INV-012 |
+| CU-CLOUD-P0-01 | Submit and inspect provider-managed task | agent-codex | C+F | E2 | INV-001, INV-002, INV-007 |
+| CU-CLOUD-P0-02 | Retrieve provider-managed task diff | agent-codex | D+F | E0 | INV-007, INV-011 |
+| CU-SES-P0-01 | P0 in-process session lifecycle | session-runtime | E | E1 | INV-004, INV-012 |
+| CU-API-P0-01 | P0 login and session HTTP API | control-plane | F | Per endpoint | INV-007, INV-010 |
+| CU-API-P0-02 | P0 live event stream | control-plane | D+F | E0 | Session-local ordering |
+| CU-WEB-P0-01 | Private operator browser flow | web | F | E0 | INV-007, INV-012 |
 | CU-FS-00 | `WorkspacePath::try_new` | domain/protocol | A | E0 | Path-shape type invariant |
 | CU-PROTO-01 | Session reducer `apply` | domain | A | E0 | INV-003, INV-004 |
 | CU-PROTO-02 | Public event serde round trip | protocol-web | A | E0 | Versioned public protocol |
@@ -1553,6 +1600,35 @@ This is the initial P1 contract inventory. The LLM MAY add CUs when a public bou
 ---
 
 # 15. P1 Task Graph and Seed Tasks
+
+## 15.0 P0 personal BYOS fast path
+
+ADR-0002 inserts this fast path before the original P1 foundation:
+
+```mermaid
+flowchart TD
+    T000[T000 Bootstrap Workspace] --> T001[T001 P0 Subscription Boundary]
+    T000 --> T010[T010 Strong IDs and Errors]
+    T001 --> T002[T002 Codex Login Broker]
+    T001 --> T003[T003 Codex Cloud CLI Adapter]
+    T010 --> T002
+    T010 --> T003
+    T002 --> T004[T004 Codex Cloud Task Orchestrator]
+    T003 --> T004
+    T004 --> T005[T005 P0 Session API and Stream]
+    T005 --> T006[T006 Minimal Operator Web]
+    T006 --> T007[T007 P0 Subscription E2E]
+```
+
+| ID | Outcome | CUs | Dependencies | Machine acceptance |
+|---|---|---|---|---|
+| T001 | Personal BYOS boundary, ADR, CU inventory, and executable task graph | P0 CU inventory | T000 | Documentation reference and consistency checks |
+| T002 | Version-pinned Codex device-login broker and isolated credential scope | CU-AUTH-P0-01, CU-AUTH-P0-02 | T001,T010 | Fake CLI login lifecycle, concurrency, permission, and secret-canary tests |
+| T003 | Version-pinned Codex Cloud CLI adapter | CU-AGT-P0-01, CU-AGT-P0-02, CU-BKD-01 | T001,T010 | Recorded fixtures, malformed output, argv injection, version, task-status, and conformance tests |
+| T004 | Codex Cloud task submit/status/diff orchestrator for an administrator-configured environment | CU-CLOUD-P0-01, CU-CLOUD-P0-02 | T002,T003 | Fake CLI lifecycle, uncertain-submit reconciliation, diff, redaction, and no-local-execution tests |
+| T005 | P0 login/session HTTP API and replayable live stream | CU-SES-P0-01, CU-API-P0-01, CU-API-P0-02 | T004 | HTTP, ordering, reconnect, cancel, cleanup, and redaction contract tests |
+| T006 | Private single-page operator flow | CU-WEB-P0-01 | T005 | Browser login-status, prompt, streaming, cancel, diff, refresh, and no-secret tests |
+| T007 | Deterministic and live subscription end-to-end acceptance | All P0 CUs | T006 | Fake-Codex CI E2E plus one operator-authenticated live smoke |
 
 ## 15.1 Task graph
 
@@ -1909,6 +1985,26 @@ Operating model:
 ---
 
 # 19. Initial Execution Order
+
+## P0 personal BYOS priority path
+
+After T000 and T010 are Accepted, prioritize the independent P0 slice:
+
+```text
+T001 P0 Subscription Boundary
+  ├→ T002 Codex Login Broker
+  └→ T003 Codex Cloud CLI Adapter
+       ↓
+T004 Codex Cloud Task Orchestrator
+  ↓
+T005 Session API and Stream
+  ↓
+T006 Minimal Operator Web
+  ↓
+T007 P0 Subscription E2E
+```
+
+This priority does not add a dependency from P1 to P0. P1 work may continue independently.
 
 ## Batch A — Deterministic foundation
 
