@@ -139,5 +139,8 @@ On 2026-07-27, the implementation passed:
 - `cargo build --workspace --bins --all-features`
 - `cargo deny check` — advisories, bans, licenses, and sources all `ok`.
 
+Hosted CI run [30262687153](https://github.com/fallrising/fanzloud/actions/runs/30262687153)
+also passed all workflow gates on commit `aa56b75`.
+
 The independent acceptance report is conditional because the requested fresh Claude document
 review did not return a report. No `[TD-GAP]` remains in the implementation scope.

@@ -17,17 +17,18 @@ Branch: `main`
 Local commits:
 
 ```text
+aa56b75 feat: add domain value foundation
 f9f3e2d docs: save development handoff
 9d45850 docs: prioritize personal Codex cloud BYOS slice
 d605028 docs: record T000 verification evidence
 76f72b3 chore: bootstrap codebox workspace
 ```
 
-The pushed remote state is `f9f3e2d` (`main -> origin/main`). The current T000/T001/T010
-documentation and T010 implementation changes are uncommitted and have not been pushed.
+The pushed remote state is `aa56b75` (`main -> origin/main`). T010's hosted CI run
+`30262687153` passed; the task remains `verifying` only because fresh acceptance review is pending.
 
 The configured remote is `git@github.com:fallrising/fanzloud.git`; `origin/main` points to
-`f9f3e2d`.
+`aa56b75`.
 
 ## Completed
 
@@ -45,6 +46,7 @@ The configured remote is `git@github.com:fallrising/fanzloud.git`; `origin/main`
   content review.
 - T010 domain implementation: strong UUID IDs, validated `WorkspacePath`, `EventSeq`, typed
   errors, serde validation, and compile-fail coverage. Local executable acceptance passed.
+- T010 hosted CI run `30262687153` passed all workflow gates.
 
 ## Verified Official Codex Surface
 
@@ -77,14 +79,13 @@ Codex Cloud environment ID and branch are administrator configuration, not brows
 
 1. T001 remains `verifying` until its fresh document-first acceptance review returns a report.
 2. T010 remains `verifying` for the same acceptance-process reason; its executable checks pass.
-3. The current T010/docs changes are uncommitted and unpushed.
+3. No implementation changes are currently uncommitted; only fresh acceptance review remains.
 
 ## Next Session
 
 1. Obtain fresh read-only Claude acceptance reports for T001 and T010, then mark accepted if clear.
-2. Ask for authorization before pushing the current uncommitted changes.
-3. Write T002/T003 specifications and tests after T001 and T010 are accepted.
-4. Implement:
+2. Write T002/T003 specifications and tests after T001 and T010 are accepted.
+3. Implement:
    - T002 Codex login broker
    - T003 pinned Codex Cloud CLI adapter
    - T004 cloud task orchestrator
