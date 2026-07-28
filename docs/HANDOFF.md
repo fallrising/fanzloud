@@ -14,9 +14,9 @@ code beside `CODEX_HOME`.
 Branch: `main`
 
 T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, T004C, the T004 coordination
-parent, T005A, T005B, and T005C are Accepted. T005C is the latest completed production task;
-`ACCEPT-T005C` records its implementation, rejection/repair, and final review evidence. The T005
-coordination parent is the sole Ready task and authorizes only combined tests/documentation.
+parent, T005A, T005B, T005C, and the T005 coordination parent are Accepted. T005C is the latest
+completed production task; `ACCEPT-T005C` records its implementation, rejection/repair, and final
+review evidence. `ACCEPT-T005` records the child-union composition acceptance.
 
 ## Accepted Baseline
 
@@ -201,6 +201,18 @@ review returned `COMPOSITION ACCEPTED`, and the parent is Accepted.
 - The first fresh review rejected four material admission/protocol/evidence gaps. Commit `e965add`
   repaired them; the final fresh-context Codex fallback returned `IMPLEMENTATION ACCEPTED`.
 
+## Accepted T005 Composition
+
+- The parent public boundary is exactly the union of T005A, T005B, and T005C and adds no
+  production source or authority.
+- Two exact combined regressions cover authenticated HTTP plus real WebSocket initial/live/replay
+  flow, disconnect independence, retained cursor resume, forbidden browser-selected execution
+  fields/routes, and cross-channel secret containment.
+- The control-plane package reports 34 tests and the workspace reports 176 tests. All format,
+  Clippy, build, dependency-policy, and diff gates pass.
+- Cursor and Grok exceeded the owner's 80-second review windows. The authorized fresh-context
+  Codex fallback returned `COMPOSITION ACCEPTED`.
+
 ## Verified Pinned Cloud Surface
 
 The official `rust-v0.145.0` source and local pinned CLI help establish:
@@ -232,10 +244,9 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Add the two exact T005 combined-flow regressions, run all composition gates, and obtain a fresh
-   `COMPOSITION ACCEPTED` review without changing production behavior.
-2. Continue with T006 minimal private operator web flow and T007 deterministic/live subscription
-   end-to-end acceptance after their dependencies are Accepted.
+1. Materialize T006 from the accepted TD as the next spec-first minimal private operator web flow.
+2. Materialize T007 only after T006, then run deterministic/live subscription end-to-end
+   acceptance.
 
 ADR-0004 and the complete T005 decomposition received fresh Cursor Agent design acceptance after
 three rejected drafts repaired durability/authentication, state-transition, cancel/shutdown,
@@ -245,8 +256,8 @@ Three design-review passes repaired those plus two residual contradictions. Impl
 then repaired fixed-work/disconnect/error coverage, admission and shutdown races, UUID
 classification, and concurrent logout joining. T005C then repaired exact upgrade, revocation,
 subscription-admission, close, and fragmented/reconnect evidence gaps. The final fresh-context
-verdict was `IMPLEMENTATION ACCEPTED`. T005B and T005C are Accepted; the T005 coordination parent
-is the sole Ready task.
+verdict was `IMPLEMENTATION ACCEPTED`. T005B and T005C are Accepted. The two parent composition
+regressions and all combined gates then passed; a fresh review returned `COMPOSITION ACCEPTED`.
 
 Do not re-run T001/T010/T002 acceptance work unless their relevant files or behavior change.
 

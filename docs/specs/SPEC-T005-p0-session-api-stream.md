@@ -1,7 +1,7 @@
 ---
 id: SPEC-T005
 title: P0 session API and replayable live stream composition
-status: ready
+status: accepted
 contract_units: [CU-SES-P0-01, CU-API-P0-01, CU-API-P0-02]
 module: session-runtime/control-plane
 milestone: P0
@@ -124,8 +124,8 @@ bootstrap/cookie/prompt/diff/device-code/path canaries across HTTP and WebSocket
 | Command or check | Result | Evidence URI or hash |
 |---|---|---|
 | Child acceptance reports | Passed | ACCEPT-T005A/B/C |
-| Workspace gates | Pending | ACCEPT-T005 |
-| Fresh composition review | Pending | ACCEPT-T005 |
+| Workspace gates | Passed | `ACCEPT-T005` |
+| Fresh composition review | `COMPOSITION ACCEPTED` | `ACCEPT-T005` |
 
 # Traceability
 
@@ -137,6 +137,6 @@ None. ADR-0004 resolves the P0-only design choices.
 
 # Self-Check
 
-T005A, T005B, and T005C are independently Accepted. T005 is Ready for the two composition tests,
-combined workspace gates, and a fresh read-only composition review. It authorizes no new
-production behavior.
+T005A, T005B, and T005C are independently Accepted. Both exact composition tests, combined
+workspace gates, and the fresh read-only review pass. T005 is Accepted and adds no production
+behavior beyond its children.
