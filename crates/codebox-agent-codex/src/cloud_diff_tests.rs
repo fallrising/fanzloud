@@ -165,6 +165,19 @@ impl TestLayout {
         entries.sort();
         ManagedSnapshot(entries)
     }
+
+    fn durable_snapshot(&self) -> ManagedSnapshot {
+        let mut entries = Vec::new();
+        snapshot_tree(&self.root, &self.state_dir, &self.codex_home, &mut entries);
+        snapshot_tree(
+            &self.root,
+            &self.working_dir,
+            &self.codex_home,
+            &mut entries,
+        );
+        entries.sort();
+        ManagedSnapshot(entries)
+    }
 }
 
 impl Drop for TestLayout {
@@ -427,7 +440,7 @@ fn wait_for_process_exit(pid: u32) {
 #[test]
 fn cloud_diff_requires_accepted_task_reference() {
     let first = TestLayout::new();
-    let (orchestrator, _, _, _) = accepted_fake(
+    let (orchestrator, first_state, operation_id, _) = accepted_fake(
         &first,
         CloudTaskStatus::Ready,
         false,
@@ -461,6 +474,38 @@ fn cloud_diff_requires_accepted_task_reference() {
         CloudDiffReadErrorCategory::AuthorityMismatch
     );
     assert!(state.lock().expect("diff runtime state").starts.is_empty());
+
+    let mut wrong_config = CloudSubmitLedger::new(
+        operation_id,
+        &CloudEnvironmentId::try_new("env_other").expect("valid other environment"),
+        &branch(),
+    );
+    wrong_config
+        .append(CloudLedgerPhase::Authorized)
+        .expect("authorize wrong-config submit");
+    wrong_config
+        .record_started(process_identity())
+        .expect("record wrong-config process");
+    wrong_config
+        .record_task(&task(TASK_ONE))
+        .expect("record wrong-config task");
+    persist_cloud_ledger(&first.state_dir, runner_uid(), &wrong_config)
+        .expect("persist wrong-config submit");
+    let error = orchestrator
+        .diff_reader()
+        .retrieve(&eligible, CloudCancellation::new())
+        .expect_err("same paths with different administrator config must reject");
+    assert_eq!(
+        error.category(),
+        CloudDiffReadErrorCategory::AuthorityMismatch
+    );
+    assert!(
+        first_state
+            .lock()
+            .expect("diff runtime state")
+            .starts
+            .is_empty()
+    );
 }
 
 #[test]
@@ -513,6 +558,49 @@ fn cloud_diff_rejects_ineligible_lifecycle() {
         CloudDiffReadErrorCategory::IneligibleLifecycle
     );
     assert!(state.lock().expect("diff runtime state").starts.is_empty());
+
+    for phase in ["failed", "provider-error", "canceled", "abandoned"] {
+        let layout = TestLayout::new();
+        let operation_id = CloudSubmitOperationId::new();
+        let task_id = task(TASK_ONE);
+        let mut lifecycle = CloudLifecycleLedger::submitting(operation_id);
+        match phase {
+            "failed" => lifecycle
+                .record_failed_before_submit()
+                .expect("record failed lifecycle"),
+            "provider-error" => {
+                lifecycle
+                    .record_status(&task_id, CloudTaskStatus::Pending)
+                    .expect("record pending lifecycle");
+                lifecycle
+                    .record_status(&task_id, CloudTaskStatus::Error)
+                    .expect("record provider-error lifecycle");
+            }
+            "canceled" => lifecycle
+                .record_canceled_without_task()
+                .expect("record canceled lifecycle"),
+            "abandoned" => {
+                lifecycle
+                    .record_outcome_unknown()
+                    .expect("record unknown lifecycle");
+                lifecycle
+                    .record_abandoned_unknown()
+                    .expect("record abandoned lifecycle");
+            }
+            _ => unreachable!(),
+        }
+        persist_lifecycle_ledger(&layout.state_dir, runner_uid(), &lifecycle)
+            .expect("persist ineligible lifecycle");
+        let (orchestrator, _) = fake_orchestrator(&layout, []);
+        let error = orchestrator
+            .diff_eligible_task()
+            .expect_err("terminal non-diff lifecycle must be ineligible");
+        assert_eq!(
+            error.category(),
+            CloudDiffReadErrorCategory::IneligibleLifecycle,
+            "{phase}"
+        );
+    }
 
     for (status, adopted) in [
         (CloudTaskStatus::Ready, false),
@@ -778,6 +866,7 @@ fn cloud_diff_cancel_reaps_without_partial_result() {
         CloudTaskOrchestrator::new(layout.config()).expect("construct cancellation orchestrator");
     let eligible = orchestrator.diff_eligible_task().expect("eligible task");
     let reader = orchestrator.diff_reader();
+    let before = layout.durable_snapshot();
     let cancellation = CloudCancellation::new();
     let cancel_handle = cancellation.clone();
     let retrieval = thread::spawn(move || reader.retrieve(&eligible, cancellation));
@@ -792,6 +881,7 @@ fn cloud_diff_cancel_reaps_without_partial_result() {
     assert_eq!(error.category(), CloudDiffReadErrorCategory::Canceled);
     wait_for_process_exit(parent_pid);
     wait_for_process_exit(child_pid);
+    assert_eq!(layout.durable_snapshot(), before);
 
     let canceled = CloudCancellation::new();
     canceled.cancel();
