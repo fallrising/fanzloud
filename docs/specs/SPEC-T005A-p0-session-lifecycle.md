@@ -136,10 +136,12 @@ bounded, serializable where transported, and have redacted `Debug`/`Display`.
     cancel_requested: bool }`, where `last_known_pending` must be the previously observed exact
     `Pending` projection;
   - `CanceledBeforeCloudStart`; or
-  - `StoppedBeforeCloudStart`.
+  - `StoppedBeforeCloudStart`; or
+  - `StoppedAfterLowerFailure`.
 - Events contain schema version 1, session ID, sequence, optional turn ID, and one typed safe event:
   `TurnAccepted`, `TurnCanceledBeforeCloudStart`, `LifecycleChanged`, `CancelRequested`,
-  `MonitoringDegraded`, `RecoveryObserved`, `RecoveryResolved`, or `RuntimeStopped`.
+  `MonitoringDegraded`, `RecoveryObserved`, `RecoveryResolved`, or
+  `RuntimeStopped { reason: Shutdown | LowerFailure }`.
 - Events never contain prompt/diff/code text, task URL, raw provider output, error source strings,
   configuration, or paths.
 
@@ -270,9 +272,11 @@ No other lower error is interpreted as a lifecycle projection.
 | `Running(Starting)` | lower `Pending` | `Running(Cloud Pending)` | monitor unless cancel latched |
 | `Running(Starting)` | lower `OutcomeUnknown` | `RecoveryRequired` | no retry |
 | `Running(Starting)` | lower terminal | `Ready(Cloud terminal)` | none |
+| `Running(Starting)` | checked non-projectable lower error | `Stopped(StoppedAfterLowerFailure)` | no retry |
 | `Running(Cloud Pending)` | inspect pending | `Running(Cloud Pending)` | next scheduled inspect |
 | `Running(Cloud Pending)` | checked inspect failure | `MonitoringDegraded(last known Pending)` | backoff inspect |
 | `MonitoringDegraded` | inspect pending | `Running(Cloud Pending)` | reset cadence |
+| `Running`/`MonitoringDegraded` | checked non-provider-read lower error | `Stopped(StoppedAfterLowerFailure)` | no retry |
 | `Running`/`MonitoringDegraded` | lower terminal or explicit cancel result | `Ready` | none |
 | `RecoveryRequired` | reconciliation | `RecoveryRequired` | one reconcile |
 | `RecoveryRequired` | adopt to pending | `Running(Cloud Pending)` | monitoring armed |
