@@ -17,6 +17,7 @@ Branch: `main`
 Local commits:
 
 ```text
+9f1bbcc docs: specify Codex login boundary
 aa56b75 feat: add domain value foundation
 f9f3e2d docs: save development handoff
 9d45850 docs: prioritize personal Codex cloud BYOS slice
@@ -24,11 +25,12 @@ d605028 docs: record T000 verification evidence
 76f72b3 chore: bootstrap codebox workspace
 ```
 
-The pushed remote state is `aa56b75` (`main -> origin/main`). T010's hosted CI run
-`30262687153` passed; the task remains `verifying` only because fresh acceptance review is pending.
+The pushed remote state is `9f1bbcc` (`main -> origin/main`). T010's hosted CI run
+`30262687153` and T002 documentation CI run `30263626003` passed; T010 remains `verifying` only
+because fresh acceptance review is pending.
 
 The configured remote is `git@github.com:fallrising/fanzloud.git`; `origin/main` points to
-`aa56b75`.
+`9f1bbcc`.
 
 ## Completed
 
@@ -50,6 +52,7 @@ The configured remote is `git@github.com:fallrising/fanzloud.git`; `origin/main`
 - T002 login broker contract draft records the trusted `CODEX_HOME` boundary and an explicit
   `[TD-GAP]` for pinned-CLI device-code output and exit semantics; no production login code was
   written while that gap remains.
+- T002 documentation CI run `30263626003` passed all workflow gates.
 
 ## Verified Official Codex Surface
 

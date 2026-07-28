@@ -175,3 +175,6 @@ intent, started, and one terminal or unknown outcome without recording credentia
 
 T002 is blocked by the `[TD-GAP]` above and by T001/T010 acceptance. No production implementation
 or live subscription login is authorized by this draft.
+
+The documentation commit passed hosted CI in [run 30263626003](https://github.com/fallrising/fanzloud/actions/runs/30263626003)
+on `9f1bbcc`; this validates repository gates only and does not resolve the T002 contract gap.
