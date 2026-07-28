@@ -1,7 +1,7 @@
 ---
 id: SPEC-T005C
 title: P0 replay-then-live WebSocket stream
-status: ready
+status: accepted
 contract_unit: CU-API-P0-02
 module: codebox-control-plane
 milestone: P0
@@ -322,10 +322,10 @@ detect scheduling flakiness.
 
 | Command or check | Result | Evidence URI or hash |
 |---|---|---|
-| Skeleton compile before production | Pending | T005C commit |
-| Focused/repeated WS tests | Pending | ACCEPT-T005C |
-| Workspace gates | Pending | ACCEPT-T005C |
-| Fresh acceptance review | Pending | ACCEPT-T005C |
+| Skeleton compile before production | Passed | `c169490` |
+| Focused/repeated WS tests | Passed | `ACCEPT-T005C` |
+| Workspace gates | Passed | `ACCEPT-T005C` |
+| Fresh acceptance review | `IMPLEMENTATION ACCEPTED` | `ACCEPT-T005C` |
 
 # Traceability
 
@@ -339,6 +339,5 @@ None. ADR-0004 defines P0 replay retention, gap handling, authentication, and no
 
 T005A and T005B are Accepted. The T005C audit repaired exact frame/error/close schemas, normalized
 upgrade rejection, open-connection logout/expiry, control-frame/deadline behavior, concrete
-composition, and private deterministic seams. The final fresh-context read-only review returned
-`DESIGN ACCEPTED`. T005C is Ready for skeleton-first implementation; no T005C production
-implementation is authorized.
+composition, and private deterministic seams. All 13 tests, repeated concurrency evidence,
+workspace gates, and the final repaired-tree fresh review pass. T005C is Accepted.

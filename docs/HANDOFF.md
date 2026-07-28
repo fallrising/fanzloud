@@ -14,9 +14,9 @@ code beside `CODEX_HOME`.
 Branch: `main`
 
 T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, T004C, the T004 coordination
-parent, T005A, and T005B are Accepted. T005B is the latest completed production task;
-`ACCEPT-T005B` records its implementation and review evidence. T005C is the sole Ready production
-task; the T005 coordination parent remains Proposed until T005C is independently Accepted.
+parent, T005A, T005B, and T005C are Accepted. T005C is the latest completed production task;
+`ACCEPT-T005C` records its implementation, rejection/repair, and final review evidence. The T005
+coordination parent is the sole Ready task and authorizes only combined tests/documentation.
 
 ## Accepted Baseline
 
@@ -181,6 +181,26 @@ review returned `COMPOSITION ACCEPTED`, and the parent is Accepted.
   fresh-context Codex fallback returned `IMPLEMENTATION ACCEPTED` after all review findings were
   repaired.
 
+### T005C — authenticated replay-then-live WebSocket
+
+- Added the exact HTTP/1.1 version-13 upgrade route over the accepted cookie, exact Origin,
+  application-session lease, and lifecycle admission, with normalized safe 426 and hardened 101
+  headers.
+- Added one bounded version-1 subscribe frame, prevalidated replay/snapshot/end serialization, and
+  direct polling of the accepted T005A live receiver without a second production event queue or
+  sequence authority.
+- Logout/monotonic expiry and lifecycle shutdown are observed during idle, replay/live sends, and
+  even a blocked subscription admission. Current writes remain bounded; shutdown uses 1012 and
+  every receiver is dropped exactly once.
+- Exact safe error/close mappings cover version/session/cursor/gap/cap/lag/unavailable/protocol
+  partitions. Fragmented reassembly, ping/control timing, send timeout, close grace, redaction, and
+  E0/no-mutation boundaries are tested directly.
+- All 13 required tests are substantive. Tests 8–11 each repeat ten times internally, the complete
+  T005C suite passed ten consecutive external runs, and a real loopback exercises the concrete
+  accepted T005A adapter.
+- The first fresh review rejected four material admission/protocol/evidence gaps. Commit `e965add`
+  repaired them; the final fresh-context Codex fallback returned `IMPLEMENTATION ACCEPTED`.
+
 ## Verified Pinned Cloud Surface
 
 The official `rust-v0.145.0` source and local pinned CLI help establish:
@@ -212,10 +232,9 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Compile all 13 sole-Ready SPEC-T005C test skeletons before production, then implement and
-   independently accept the replay/live WebSocket stream under its repaired accepted design.
-2. Run the T005 composition acceptance after all three children are Accepted.
-3. Continue with T006 minimal private operator web flow and T007 deterministic/live subscription
+1. Add the two exact T005 combined-flow regressions, run all composition gates, and obtain a fresh
+   `COMPOSITION ACCEPTED` review without changing production behavior.
+2. Continue with T006 minimal private operator web flow and T007 deterministic/live subscription
    end-to-end acceptance after their dependencies are Accepted.
 
 ADR-0004 and the complete T005 decomposition received fresh Cursor Agent design acceptance after
@@ -224,25 +243,27 @@ startup-observation, and subscription-handoff gaps. T005A is Accepted. A later T
 review found public-origin, expiry, shutdown, fake-port, route-schema, and error-map blockers.
 Three design-review passes repaired those plus two residual contradictions. Implementation reviews
 then repaired fixed-work/disconnect/error coverage, admission and shutdown races, UUID
-classification, and concurrent logout joining. The final fresh-context verdict was
-`IMPLEMENTATION ACCEPTED`. T005B is Accepted, T005C is the sole Ready production task, and T005
-remains Proposed.
+classification, and concurrent logout joining. T005C then repaired exact upgrade, revocation,
+subscription-admission, close, and fragmented/reconnect evidence gaps. The final fresh-context
+verdict was `IMPLEMENTATION ACCEPTED`. T005B and T005C are Accepted; the T005 coordination parent
+is the sole Ready task.
 
 Do not re-run T001/T010/T002 acceptance work unless their relevant files or behavior change.
 
 ## Validation Evidence
 
-The accepted T005B tree passed:
+The accepted T005C tree passed:
 
 ```text
 cargo fmt --all -- --check
 cargo test -p codebox-control-plane --all-features
-  19 HTTP/concurrency/security tests passed
-  complete package suite repeated 10 consecutive runs
+  32 HTTP/WebSocket/concurrency/security tests passed
+  T005C suite repeated 10 consecutive external runs
+  tests 8–11 repeated 10 times internally
 cargo clippy -p codebox-control-plane --all-targets --all-features -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
-  161 tests passed
+  174 tests passed
 cargo build --workspace --bins --all-features
 cargo deny check
   advisories ok, bans ok, licenses ok, sources ok
@@ -251,4 +272,4 @@ git diff --check
 
 `cargo deny check` requires access to the user advisory-cache lock in this environment and was run
 with the approved permission. All listed commands passed locally. Hosted evidence must be checked
-against the pushed T005B acceptance commit.
+against the pushed T005C acceptance commit.

@@ -1,7 +1,7 @@
 ---
 id: SPEC-T005
 title: P0 session API and replayable live stream composition
-status: draft
+status: ready
 contract_units: [CU-SES-P0-01, CU-API-P0-01, CU-API-P0-02]
 module: session-runtime/control-plane
 milestone: P0
@@ -109,14 +109,21 @@ text, and internal paths are excluded.
 
 # Test Specification
 
-The parent runs every child suite plus a deterministic complete-flow integration test and a
-no-local-execution/no-secret composition regression.
+The parent runs every child suite plus these exact composition tests:
+
+1. `p0_composition_operator_flow_replays_without_local_execution`
+2. `p0_composition_secret_and_disconnect_boundaries_hold`
+
+The first is a deterministic authenticated HTTP/WebSocket flow over the child ports and proves
+initial replay, an explicit turn, disconnect independence, retained reconnect, and no implicit
+cancel/recovery/diff call. The second combines forbidden-authority inspection with
+bootstrap/cookie/prompt/diff/device-code/path canaries across HTTP and WebSocket outputs.
 
 # Acceptance Evidence
 
 | Command or check | Result | Evidence URI or hash |
 |---|---|---|
-| Child acceptance reports | Pending | ACCEPT-T005A/B/C |
+| Child acceptance reports | Passed | ACCEPT-T005A/B/C |
 | Workspace gates | Pending | ACCEPT-T005 |
 | Fresh composition review | Pending | ACCEPT-T005 |
 
@@ -130,4 +137,6 @@ None. ADR-0004 resolves the P0-only design choices.
 
 # Self-Check
 
-Draft until all children are independently accepted.
+T005A, T005B, and T005C are independently Accepted. T005 is Ready for the two composition tests,
+combined workspace gates, and a fresh read-only composition review. It authorizes no new
+production behavior.
