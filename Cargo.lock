@@ -65,6 +65,10 @@ name = "codebox-node-agent"
 version = "0.0.0"
 
 [[package]]
+name = "codebox-session-runtime"
+version = "0.0.0"
+
+[[package]]
 name = "futures-core"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
