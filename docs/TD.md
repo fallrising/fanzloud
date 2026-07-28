@@ -1638,7 +1638,7 @@ flowchart TD
 | T004A1 | Prompt-free Cloud submit recovery composition bridge | CU-CLOUD-P0-01 | T004A | Observation matrix, explicit adopted/abandoned terminalization, replay, conflict, and no-extra-exec tests |
 | T004B | Codex Cloud task lifecycle and local cancellation policy | CU-AGT-P0-02 | T004A1 | Durable lifecycle, status, explicit recovery, disconnect, local cancel, ordering, and no-automatic-retry tests |
 | T004C | Provider-managed task diff retrieval | CU-CLOUD-P0-02 | T004A,T004B | E0 state snapshots, bounded drain, redaction, diagnostic-write prevention, and no-apply tests |
-| T004 | Accepted provider-specific Codex Cloud orchestrator coordination parent | CU-AGT-P0-02, CU-CLOUD-P0-01, CU-CLOUD-P0-02 | T004A,T004B,T004C | All child acceptances plus combined no-local-execution and workspace gates; ADR-0003 keeps CU-BKD-01 in T180 |
+| T004 | Accepted provider-specific Codex Cloud orchestrator coordination parent | CU-AGT-P0-02, CU-CLOUD-P0-01, CU-CLOUD-P0-02 | T004A,T004A1,T004B,T004C | All child acceptances plus combined no-local-execution and workspace gates; ADR-0003 keeps CU-BKD-01 in T180 |
 | T005 | P0 login/session HTTP API and replayable live stream | CU-SES-P0-01, CU-API-P0-01, CU-API-P0-02 | T004 | HTTP, ordering, reconnect, cancel, cleanup, and redaction contract tests |
 | T006 | Private single-page operator flow | CU-WEB-P0-01 | T005 | Browser login-status, prompt, streaming, cancel, diff, refresh, and no-secret tests |
 | T007 | Deterministic and live subscription end-to-end acceptance | All P0 CUs | T006 | Fake-Codex CI E2E plus one operator-authenticated live smoke |

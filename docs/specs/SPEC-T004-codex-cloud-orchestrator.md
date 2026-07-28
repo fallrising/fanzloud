@@ -42,13 +42,11 @@ Ready at a time. `[NEW-SPEC]`
 
 # Composition Rules
 
-- T004A, T004A1, T004B, and T004C are independently Accepted; the parent is Ready for composition
-  acceptance.
+- T004A, T004A1, T004B, and T004C are independently Accepted.
 - A child owns exactly the CU and atomicity listed in its task.
 - Shared process code may be private implementation, but its fault tests are claimed by each
   affected CU; sharing code does not merge acceptance.
-- T004 remains unaccepted until the combined P14/P15 suite, workspace gates, and fresh composition
-  review pass.
+- The combined P14/P15 suite, workspace gates, and fresh composition review pass.
 
 # Cross-Child Security Contract
 
@@ -95,3 +93,9 @@ does not accept T004 or any production child.
 The decomposition and serialized Ready order are `[NEW-SPEC]` applications of TD §9. ADR-0003
 resolves the earlier E0 credential-domain and premature generic-backend gaps. No in-scope
 `[TD-GAP]` remains in the parent decomposition.
+
+# Acceptance
+
+T004 is Accepted in [`ACCEPT-T004`](../acceptance/T004.acceptance.md). All four child reports,
+combined workspace/P14/P15 gates, dependency policy, repeated process-sensitive evidence, and the
+fresh read-only composition review passed.

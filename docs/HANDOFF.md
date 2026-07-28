@@ -13,9 +13,9 @@ code beside `CODEX_HOME`.
 
 Branch: `main`
 
-T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, and T004C are Accepted. T004C is the
-latest completed production task. Its local acceptance is recorded in `ACCEPT-T004C`. The T004
-coordination parent is Ready for its fresh composition review.
+T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, T004C, and the T004 coordination
+parent are Accepted. T004C is the latest completed production task; `ACCEPT-T004C` records its
+implementation evidence and `ACCEPT-T004` records the accepted composition.
 
 ## Accepted Baseline
 
@@ -139,8 +139,8 @@ freezing incomplete backend/event types in the provider-specific P0. It also def
 provider-task and Codebox-managed state while excluding byte comparisons of provider-owned
 credential storage.
 
-The combined local workspace, P14, and P15 gates pass. The T004 parent still requires its separate
-fresh composition review and acceptance report.
+The combined local workspace, P14, and P15 gates pass. A separate fresh Cursor Agent composition
+review returned `COMPOSITION ACCEPTED`, and the parent is Accepted.
 
 ## Verified Pinned Cloud Surface
 
@@ -173,10 +173,10 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Request the fresh T004 parent composition review against all four accepted child reports and the
-   combined P14/P15/workspace evidence.
-2. If accepted, record `ACCEPT-T004`, mark the parent Accepted, and hand off T005 as the next P0
-   slice.
+1. Specify and decompose T005, the P0 in-process session HTTP API and replayable live stream, before
+   production implementation.
+2. Continue with T006 minimal private operator web flow and T007 deterministic/live subscription
+   end-to-end acceptance after their dependencies are Accepted.
 
 Do not re-run T001/T010/T002 acceptance work unless their relevant files or behavior change.
 
