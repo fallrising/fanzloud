@@ -212,8 +212,8 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Audit the sole Ready SPEC-T005C transport contract, compile all 13 named test skeletons before
-   production, then implement and independently accept the replay/live WebSocket stream.
+1. Compile all 13 sole-Ready SPEC-T005C test skeletons before production, then implement and
+   independently accept the replay/live WebSocket stream under its repaired accepted design.
 2. Run the T005 composition acceptance after all three children are Accepted.
 3. Continue with T006 minimal private operator web flow and T007 deterministic/live subscription
    end-to-end acceptance after their dependencies are Accepted.
