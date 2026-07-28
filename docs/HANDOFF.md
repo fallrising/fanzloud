@@ -124,10 +124,10 @@ behavior or leave a runnable child.
 - The final fresh Cursor Agent implementation review returned `IMPLEMENTATION ACCEPTED` with no
   blocker.
 
-## Current T004 Decomposition
+## Accepted T004 Composition
 
-T004A, its T004A1 recovery amendment, T004B, and T004C are independently Accepted. The parent is
-Ready for composition acceptance over:
+T004A, its T004A1 recovery amendment, T004B, and T004C are independently Accepted. The parent
+composition is also Accepted over:
 
 - T004A — CU-CLOUD-P0-01 E2 trusted submit/status/list runner.
 - T004A1 — CU-CLOUD-P0-01 E2 prompt-free observation and explicit unknown terminalization.
@@ -173,10 +173,17 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Specify and decompose T005, the P0 in-process session HTTP API and replayable live stream, before
-   production implementation.
-2. Continue with T006 minimal private operator web flow and T007 deterministic/live subscription
+1. Generate and compile all 16 named SPEC-T005A skeletons before production code, then implement
+   and accept the sole Ready T005A session lifecycle.
+2. Independently accept T005B private HTTP API, T005C
+   replay/live stream, and the T005 composition parent in that order.
+3. Continue with T006 minimal private operator web flow and T007 deterministic/live subscription
    end-to-end acceptance after their dependencies are Accepted.
+
+ADR-0004 and the complete T005 decomposition received fresh Cursor Agent design acceptance after
+three rejected drafts repaired durability/authentication, state-transition, cancel/shutdown,
+startup-observation, and subscription-handoff gaps. T005A is the sole Ready production task;
+T005B, T005C, and T005 remain Proposed.
 
 Do not re-run T001/T010/T002 acceptance work unless their relevant files or behavior change.
 

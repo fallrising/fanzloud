@@ -1622,7 +1622,10 @@ flowchart TD
     T004A1 --> T004B[T004B Cloud Task Lifecycle]
     T004B --> T004C[T004C Cloud Diff Retrieval]
     T004C --> T004[T004 Orchestrator Parent]
-    T004 --> T005[T005 P0 Session API and Stream]
+    T004 --> T005A[T005A P0 Session Lifecycle]
+    T005A --> T005B[T005B P0 HTTP API]
+    T005B --> T005C[T005C P0 WebSocket Stream]
+    T005C --> T005[T005 Session API Parent]
     T005 --> T006[T006 Minimal Operator Web]
     T006 --> T007[T007 P0 Subscription E2E]
 ```
@@ -1639,7 +1642,10 @@ flowchart TD
 | T004B | Codex Cloud task lifecycle and local cancellation policy | CU-AGT-P0-02 | T004A1 | Durable lifecycle, status, explicit recovery, disconnect, local cancel, ordering, and no-automatic-retry tests |
 | T004C | Provider-managed task diff retrieval | CU-CLOUD-P0-02 | T004A,T004B | E0 state snapshots, bounded drain, redaction, diagnostic-write prevention, and no-apply tests |
 | T004 | Accepted provider-specific Codex Cloud orchestrator coordination parent | CU-AGT-P0-02, CU-CLOUD-P0-01, CU-CLOUD-P0-02 | T004A,T004A1,T004B,T004C | All child acceptances plus combined no-local-execution and workspace gates; ADR-0003 keeps CU-BKD-01 in T180 |
-| T005 | P0 login/session HTTP API and replayable live stream | CU-SES-P0-01, CU-API-P0-01, CU-API-P0-02 | T004 | HTTP, ordering, reconnect, cancel, cleanup, and redaction contract tests |
+| T005A | P0 in-process session lifecycle and bounded event fanout | CU-SES-P0-01 | T004 | Single-turn, E1/lower-E2 ordering, polling, cancel, recovery, replay-gap, backpressure, cleanup, and redaction tests |
+| T005B | Authenticated P0 login and session HTTP API | CU-API-P0-01 | T005A | Route, authentication, Origin, instance/idempotency, recovery-authority, bounds, code/secret, and error-mapping tests |
+| T005C | P0 replay-then-live WebSocket stream | CU-API-P0-02 | T005B | Replay/live ordering, reconnect, cursor gaps, protocol bounds, lag/disconnect cleanup, and redaction tests |
+| T005 | Accepted P0 session/API/stream coordination parent | CU-SES-P0-01, CU-API-P0-01, CU-API-P0-02 | T005A,T005B,T005C | All child acceptances plus combined HTTP, reconnect, cancel, cleanup, no-secret, P14/P15, and workspace gates |
 | T006 | Private single-page operator flow | CU-WEB-P0-01 | T005 | Browser login-status, prompt, streaming, cancel, diff, refresh, and no-secret tests |
 | T007 | Deterministic and live subscription end-to-end acceptance | All P0 CUs | T006 | Fake-Codex CI E2E plus one operator-authenticated live smoke |
 
@@ -2022,7 +2028,13 @@ T004C Cloud Diff Retrieval
   ↓
 T004 Orchestrator Parent
   ↓
-T005 Session API and Stream
+T005A P0 Session Lifecycle
+  ↓
+T005B Authenticated P0 HTTP API
+  ↓
+T005C P0 WebSocket Stream
+  ↓
+T005 Session API Parent
   ↓
 T006 Minimal Operator Web
   ↓

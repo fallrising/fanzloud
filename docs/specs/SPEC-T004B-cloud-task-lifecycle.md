@@ -208,8 +208,9 @@ persisted. `[NEW-SPEC]`
 - The first committed terminal transition wins; a loser re-reads and returns the committed state.
 - Browser connection lifetime is not an owner lease. Disconnect, reconnect, or a dropped response
   does not call `cancel`, mutate lifecycle state, or start another submit.
-- T005 must add durable session events before presenting this lifecycle over HTTP; T004B does not
-  claim session-event durability. `[NEW-SPEC]`
+- T005A must publish an ordered process-lifetime session event only after this durable lifecycle
+  commit before presenting the projection over HTTP. ADR-0004 supersedes the earlier
+  crash-durability implication; T004B does not claim P0 session-event persistence. `[NEW-SPEC]`
 
 # Unknown-Submit Recovery
 
@@ -329,7 +330,7 @@ After success, checked failure, cancellation, timeout, concurrent loss, or recov
 - Reconciliation candidates do not prove which task belongs to an unknown submit.
 - Explicit abandonment does not prove no task exists and can be followed by a duplicate provider
   task if the operator chooses to submit again.
-- T004B does not define HTTP idempotency, durable session events, stream reconnect, polling rate,
+- T004B does not define HTTP idempotency, P0 session events, stream reconnect, polling rate,
   diff retrieval, or artifact storage.
 - Provider `Ready` means the pinned provider status, not that a patch is safe or applicable.
 
