@@ -264,6 +264,7 @@ struct FakeSessionState {
     live: Arc<FakeLiveState>,
     subscribe_calls: usize,
     last_cursor: Option<(SessionId, EventSeq)>,
+    publish_start_event: bool,
 }
 
 struct FakeSession {
@@ -295,6 +296,7 @@ impl FakeSession {
                 live: Arc::new(FakeLiveState::default()),
                 subscribe_calls: 0,
                 last_cursor: None,
+                publish_start_event: false,
             }),
         }
     }
@@ -345,6 +347,10 @@ impl FakeSession {
 
     fn set_subscription_error(&self, error: SessionSubscribeError) {
         self.state.lock().expect("fake session").subscription_error = Some(error);
+    }
+
+    fn enable_composition_start_event(&self) {
+        self.state.lock().expect("fake session").publish_start_event = true;
     }
 
     fn subscription_observation(&self) -> (usize, Option<(SessionId, EventSeq)>, usize) {
@@ -403,22 +409,51 @@ impl SessionPort for FakeSession {
     }
 
     fn start_turn(&self, prompt: CloudPrompt) -> Result<P0TurnReceipt, SessionPortError> {
-        let gate = {
+        let (gate, receipt) = {
             let mut state = self
                 .state
                 .lock()
                 .map_err(|_| SessionPortError::Unavailable)?;
             state.start_calls += 1;
             state.last_prompt = Some(prompt.as_str().to_owned());
-            state.start_gate.clone()
+            let turn_id = TurnId::new();
+            let high_water_seq = if state.publish_start_event {
+                let high_water_seq = state
+                    .snapshot
+                    .high_water_seq
+                    .checked_next()
+                    .map_err(|_| SessionPortError::Unavailable)?;
+                let envelope = P0SessionEventEnvelope {
+                    schema_version: 1,
+                    session_id: self.identity.session_id,
+                    seq: high_water_seq,
+                    turn_id: Some(turn_id),
+                    payload: P0SessionEvent::TurnAccepted,
+                };
+                state.snapshot.state = P0SessionState::Running;
+                state.snapshot.current_turn = Some(P0TurnSnapshot {
+                    turn_id,
+                    projection: P0TurnProjection::Queued,
+                });
+                state.snapshot.high_water_seq = high_water_seq;
+                state.replay.push(envelope.clone());
+                state.live.push(Ok(envelope));
+                high_water_seq
+            } else {
+                EventSeq::new(1)
+            };
+            (
+                state.start_gate.clone(),
+                P0TurnReceipt {
+                    turn_id,
+                    high_water_seq,
+                },
+            )
         };
         if let Some(gate) = gate {
             gate.enter_and_wait();
         }
-        Ok(P0TurnReceipt {
-            turn_id: TurnId::new(),
-            high_water_seq: EventSeq::new(1),
-        })
+        Ok(receipt)
     }
 
     fn cancel_turn(&self, _actor: P0Actor) -> Result<P0SessionSnapshot, SessionPortError> {
@@ -525,7 +560,12 @@ impl SessionPort for FakeSession {
             return Err(error);
         }
         Ok(SessionSubscription {
-            replay: state.replay.clone(),
+            replay: state
+                .replay
+                .iter()
+                .filter(|envelope| envelope.seq > after_seq)
+                .cloned()
+                .collect(),
             snapshot: state.snapshot.clone(),
             live: Box::new(FakeLive {
                 state: Arc::clone(&state.live),
@@ -2506,6 +2546,26 @@ async fn connect_loopback(
     socket
 }
 
+async fn receive_loopback_json(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    count: usize,
+) -> Vec<Value> {
+    let mut values = Vec::with_capacity(count);
+    while values.len() < count {
+        let message = socket
+            .next()
+            .await
+            .expect("loopback frame")
+            .expect("loopback WebSocket read");
+        if let ClientMessage::Text(text) = message {
+            values.push(serde_json::from_str(&text).expect("loopback frame JSON"));
+        }
+    }
+    values
+}
+
 #[cfg(target_os = "linux")]
 static NEXT_WS_LAYOUT: AtomicU64 = AtomicU64::new(0);
 
@@ -3670,4 +3730,238 @@ async fn p0_ws_chunk_partition_and_reconnect_model_preserves_order() {
         assert_eq!(cursor, 8);
         assert_eq!(observed, (1..=8).collect::<Vec<_>>());
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p0_composition_operator_flow_replays_without_local_execution() {
+    let harness = harness(300);
+    let identity = harness.session.identity();
+    harness.session.enable_composition_start_event();
+    harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(identity, 0));
+    let (auth, _) = authenticate(&harness).await;
+    let (address, stop, server) = start_loopback(harness.router.clone()).await;
+
+    let mut initial = connect_loopback(address, &auth).await;
+    initial
+        .send(ClientMessage::Text(
+            json!({
+                "type":"subscribe",
+                "protocol_version":1,
+                "session_id":identity.session_id,
+                "after_seq":0
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("initial composition subscribe");
+    let initial_frames = receive_loopback_json(&mut initial, 3).await;
+    assert_eq!(
+        initial_frames
+            .iter()
+            .map(|frame| frame["type"].as_str().expect("initial frame type"))
+            .collect::<Vec<_>>(),
+        ["replay_begin", "snapshot", "replay_end"]
+    );
+
+    let start = send(
+        &harness.router,
+        protected_request(
+            Method::POST,
+            "/api/p0/v1/session/turns",
+            Some(&auth),
+            Some(ORIGIN_VALUE),
+            Some(CommandId::new()),
+            Some(r#"{"prompt":"composition turn"}"#),
+            Some("application/json"),
+        ),
+    )
+    .await;
+    assert_eq!(start.status, StatusCode::ACCEPTED);
+    assert_eq!(json_body(&start)["high_water_seq"], 1);
+    let live = receive_loopback_json(&mut initial, 1).await;
+    assert_eq!(live[0]["type"], "event");
+    assert_eq!(live[0]["envelope"]["seq"], 1);
+    assert_eq!(live[0]["envelope"]["payload"]["type"], "turn_accepted");
+    initial.close(None).await.expect("initial disconnect");
+
+    let mut replay = connect_loopback(address, &auth).await;
+    replay
+        .send(ClientMessage::Text(
+            json!({
+                "type":"subscribe",
+                "protocol_version":1,
+                "session_id":identity.session_id,
+                "after_seq":0
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("composition replay subscribe");
+    let replay_frames = receive_loopback_json(&mut replay, 4).await;
+    assert_eq!(
+        replay_frames
+            .iter()
+            .map(|frame| frame["type"].as_str().expect("replay frame type"))
+            .collect::<Vec<_>>(),
+        ["replay_begin", "event", "snapshot", "replay_end"]
+    );
+    assert_eq!(replay_frames[1]["envelope"]["seq"], 1);
+    replay.close(None).await.expect("replay disconnect");
+
+    let mut current = connect_loopback(address, &auth).await;
+    current
+        .send(ClientMessage::Text(
+            json!({
+                "type":"subscribe",
+                "protocol_version":1,
+                "session_id":identity.session_id,
+                "after_seq":1
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("current composition subscribe");
+    let current_frames = receive_loopback_json(&mut current, 3).await;
+    assert_eq!(
+        current_frames
+            .iter()
+            .map(|frame| frame["type"].as_str().expect("current frame type"))
+            .collect::<Vec<_>>(),
+        ["replay_begin", "snapshot", "replay_end"]
+    );
+    current.close(None).await.expect("current disconnect");
+    let _ = stop.send(());
+    server.await.expect("composition server join");
+
+    assert_eq!(harness.session.counts(), (1, 0, 0, 0, 0, 0));
+    assert_eq!(harness.login.counts(), (0, 0, 0, 0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_composition_secret_and_disconnect_boundaries_hold() {
+    let harness = harness(300);
+    let identity = harness.session.identity();
+    harness.session.enable_composition_start_event();
+    harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(identity, 0));
+    let (auth, bootstrap) = authenticate(&harness).await;
+    assert!(!String::from_utf8_lossy(&bootstrap.body).contains(BOOTSTRAP_SECRET));
+    assert!(!String::from_utf8_lossy(&bootstrap.body).contains(&auth.cookie));
+
+    let forbidden = send(
+        &harness.router,
+        protected_request(
+            Method::POST,
+            "/api/p0/v1/session/turns",
+            Some(&auth),
+            Some(ORIGIN_VALUE),
+            Some(CommandId::new()),
+            Some(
+                r#"{"prompt":"safe","executable":"/private/CREDENTIAL-CANARY","argv":["cloud","apply"],"path":"/repo","environment":"evil","branch":"main"}"#,
+            ),
+            Some("application/json"),
+        ),
+    )
+    .await;
+    assert_eq!(forbidden.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(harness.session.counts().0, 0);
+    let apply = send(
+        &harness.router,
+        protected_request(
+            Method::POST,
+            "/api/p0/v1/session/apply",
+            Some(&auth),
+            Some(ORIGIN_VALUE),
+            Some(CommandId::new()),
+            None,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(apply.status, StatusCode::NOT_FOUND);
+
+    let socket = launch_socket(
+        &harness,
+        &auth,
+        [subscribe_frame(identity.session_id, EventSeq::initial())],
+    );
+    wait_for_output(&socket.output, 3).await;
+    let login = send(
+        &harness.router,
+        protected_request(
+            Method::POST,
+            "/api/p0/v1/login/device",
+            Some(&auth),
+            Some(ORIGIN_VALUE),
+            Some(CommandId::new()),
+            None,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(login.status, StatusCode::ACCEPTED);
+    assert_eq!(json_body(&login)["verification_code"], DEVICE_CODE);
+
+    let start = send(
+        &harness.router,
+        protected_request(
+            Method::POST,
+            "/api/p0/v1/session/turns",
+            Some(&auth),
+            Some(ORIGIN_VALUE),
+            Some(CommandId::new()),
+            Some(&format!(r#"{{"prompt":"{PROMPT_CANARY}"}}"#)),
+            Some("application/json"),
+        ),
+    )
+    .await;
+    assert_eq!(start.status, StatusCode::ACCEPTED);
+    wait_for_output(&socket.output, 4).await;
+    let diff = send(
+        &harness.router,
+        protected_request(
+            Method::GET,
+            "/api/p0/v1/session/diff",
+            Some(&auth),
+            None,
+            None,
+            None,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(diff.status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&diff.body).contains(DIFF_CANARY));
+    socket
+        .input
+        .send(ClientFrame::Text(
+            r#"{"type":"subscribe","path":"/private/CREDENTIAL-CANARY"}"#.to_owned(),
+        ))
+        .expect("invalid repeated composition frame");
+    wait_for_output(&socket.output, 6).await;
+    let output = close_running(socket).await;
+    let rendered = format!("{output:?}");
+    for canary in [
+        BOOTSTRAP_SECRET,
+        DEVICE_CODE,
+        PROMPT_CANARY,
+        DIFF_CANARY,
+        "/private/CREDENTIAL-CANARY",
+        &auth.cookie,
+    ] {
+        assert!(!rendered.contains(canary));
+    }
+    assert_eq!(
+        text_values(&output)[3]["envelope"]["payload"]["type"],
+        "turn_accepted"
+    );
+    assert_eq!(text_values(&output)[4]["code"], "protocol_error");
+    assert_eq!(harness.session.counts(), (1, 0, 0, 0, 1, 0));
+    assert_eq!(harness.login.counts(), (0, 1, 0, 0));
 }
