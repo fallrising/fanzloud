@@ -2088,3 +2088,25 @@ async fn p0_http_shutdown_drains_handlers_and_cleans_lower_runtime() {
     .await;
     assert_eq!(stopped.status, StatusCode::SERVICE_UNAVAILABLE);
 }
+
+macro_rules! ws_contract_skeleton {
+    ($name:ident) => {
+        #[test]
+        #[ignore = "T005C contract skeleton"]
+        fn $name() {}
+    };
+}
+
+ws_contract_skeleton!(p0_ws_requires_cookie_origin_and_valid_upgrade);
+ws_contract_skeleton!(p0_ws_requires_one_bounded_subscribe_before_deadline);
+ws_contract_skeleton!(p0_ws_replay_snapshot_end_then_live_order_is_exact);
+ws_contract_skeleton!(p0_ws_reconnect_after_each_retained_seq_has_no_loss_or_duplicate);
+ws_contract_skeleton!(p0_ws_rejects_history_gap_without_partial_replay);
+ws_contract_skeleton!(p0_ws_rejects_future_wrong_session_and_unsupported_version);
+ws_contract_skeleton!(p0_ws_rejects_binary_unknown_fields_and_repeated_subscribe);
+ws_contract_skeleton!(p0_ws_live_handoff_closes_replay_publication_race);
+ws_contract_skeleton!(p0_ws_slow_consumer_closes_only_its_connection);
+ws_contract_skeleton!(p0_ws_disconnect_never_cancels_or_mutates_session);
+ws_contract_skeleton!(p0_ws_shutdown_and_send_failure_remove_subscriber);
+ws_contract_skeleton!(p0_ws_frames_and_errors_exclude_sensitive_canaries);
+ws_contract_skeleton!(p0_ws_chunk_partition_and_reconnect_model_preserves_order);
