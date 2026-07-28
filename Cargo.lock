@@ -67,6 +67,15 @@ version = "0.0.0"
 [[package]]
 name = "codebox-session-runtime"
 version = "0.0.0"
+dependencies = [
+ "codebox-agent-codex",
+ "codebox-domain",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
 
 [[package]]
 name = "futures-core"

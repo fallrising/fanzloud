@@ -4,3 +4,14 @@ version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
+
+[dependencies]
+codebox-agent-codex = { version = "=0.0.0", path = "../codebox-agent-codex" }
+codebox-domain = { version = "=0.0.0", path = "../codebox-domain" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["alloc", "no_std"] }
+serde_json = "1"

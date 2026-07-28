@@ -127,7 +127,8 @@ bounded, serializable where transported, and have redacted `Debug`/`Display`.
 - `P0SessionState` is exactly `Ready`, `Running`, `RecoveryRequired`, `MonitoringDegraded`, or
   `Stopped`.
 - `P0CloudLifecycle` is a serializable allowlisted projection with the same variants and strong-ID
-  fields as accepted `CloudLifecycle`; it adds no string/raw-output fields.
+  fields as accepted `CloudLifecycle`; provider task IDs become privately constructed
+  `P0CloudTaskId` display projections and add no raw-output authority.
 - A current `P0TurnProjection` is exactly one of:
   - `Queued`;
   - `Starting { cancel_requested: bool }`;
