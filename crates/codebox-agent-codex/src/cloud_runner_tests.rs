@@ -12,8 +12,8 @@ use std::os::unix::fs::PermissionsExt;
 use serde_json::json;
 
 use crate::cloud_runner::{
-    CloudCliRuntime, CloudCommandCompletion, CloudCommandEnd, CloudCommandSupervisor,
-    CloudStartFailure,
+    CloudCaptureLimits, CloudCliRuntime, CloudCommandCompletion, CloudCommandEnd,
+    CloudCommandSupervisor, CloudStartFailure,
 };
 use crate::cloud_submit_ledger::{
     CLOUD_LEDGER_FILE_NAME, CloudLedgerPhase, CloudSubmitLedger, load_cloud_ledger,
@@ -368,6 +368,7 @@ impl CloudCliRuntime for FakeRuntime {
         invocation: &CloudInvocation,
         _timeout: Duration,
         _cancellation: CloudCancellation,
+        _capture_limits: CloudCaptureLimits,
     ) -> Result<Box<dyn CloudCommandSupervisor>, CloudStartFailure> {
         let mut state = self
             .state

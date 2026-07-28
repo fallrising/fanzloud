@@ -11,9 +11,10 @@ use crate::cloud_lifecycle_types::{
 use crate::cloud_runner_types::{CloudSubmitObservation, CloudUnknownResolution};
 use crate::scope::OwnedCredentialScopeLease;
 use crate::{
-    CloudCancellation, CloudPrompt, CloudReconciliation, CloudRunnerConfig, CloudRunnerError,
+    CloudCancellation, CloudDiff, CloudDiffReadError, CloudDiffReadErrorCategory, CloudDiffReader,
+    CloudPrompt, CloudReconciliation, CloudRunnerConfig, CloudRunnerError,
     CloudRunnerErrorCategory, CloudSubmission, CloudSubmitOperationId, CloudSubmitRequest,
-    CloudTaskId, CloudTaskRunner, CloudTaskStatus,
+    CloudTaskId, CloudTaskRunner, CloudTaskStatus, DiffEligibleCloudTask,
 };
 
 pub(crate) trait LifecycleCloudRunner: Send + Sync {
@@ -34,6 +35,11 @@ pub(crate) trait LifecycleCloudRunner: Send + Sync {
         operation_id: CloudSubmitOperationId,
         resolution: CloudUnknownResolution,
     ) -> Result<CloudSubmitObservation, CloudRunnerError>;
+    fn retrieve_diff(
+        &self,
+        task: &DiffEligibleCloudTask,
+        cancellation: CloudCancellation,
+    ) -> Result<CloudDiff, CloudDiffReadError>;
 }
 
 impl LifecycleCloudRunner for CloudTaskRunner {
@@ -71,6 +77,14 @@ impl LifecycleCloudRunner for CloudTaskRunner {
     ) -> Result<CloudSubmitObservation, CloudRunnerError> {
         self.resolve_unknown(operation_id, resolution)
     }
+
+    fn retrieve_diff(
+        &self,
+        task: &DiffEligibleCloudTask,
+        cancellation: CloudCancellation,
+    ) -> Result<CloudDiff, CloudDiffReadError> {
+        self.retrieve_diff(task, cancellation)
+    }
 }
 
 struct OrchestratorState {
@@ -103,6 +117,46 @@ impl CloudTaskOrchestrator {
     pub fn new(config: CloudRunnerConfig) -> Result<Self, CloudLifecycleError> {
         let runner = CloudTaskRunner::new(config).map_err(map_runner_error)?;
         Self::from_runner(Arc::new(runner))
+    }
+
+    /// Creates a diff reader bound to this orchestrator's accepted trusted runner.
+    ///
+    /// Contract: `CU-CLOUD-P0-02`. No configuration, path, executable, or raw task-ID constructor
+    /// is exposed.
+    pub fn diff_reader(&self) -> CloudDiffReader {
+        CloudDiffReader::from_runner(Arc::clone(&self.runner))
+    }
+
+    /// Mints opaque diff authority for the current durable Ready or Applied task.
+    ///
+    /// Contract: `CU-CLOUD-P0-02`. Retrieval revalidates this snapshot against both durable lower
+    /// records under the same held credential-scope lease.
+    pub fn diff_eligible_task(&self) -> Result<DiffEligibleCloudTask, CloudDiffReadError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| CloudDiffReadError::new(CloudDiffReadErrorCategory::AuthorityMismatch))?;
+        let lifecycle = state
+            .ledger
+            .as_ref()
+            .ok_or_else(|| {
+                CloudDiffReadError::new(CloudDiffReadErrorCategory::IneligibleLifecycle)
+            })?
+            .lifecycle()
+            .map_err(|_| CloudDiffReadError::new(CloudDiffReadErrorCategory::AuthorityMismatch))?;
+        match lifecycle {
+            CloudLifecycle::Ready {
+                operation_id,
+                task_id,
+            }
+            | CloudLifecycle::Applied {
+                operation_id,
+                task_id,
+            } => Ok(DiffEligibleCloudTask::new(operation_id, task_id)),
+            _ => Err(CloudDiffReadError::new(
+                CloudDiffReadErrorCategory::IneligibleLifecycle,
+            )),
+        }
     }
 
     #[cfg(test)]

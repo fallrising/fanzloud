@@ -11,6 +11,7 @@
 
 mod broker;
 mod cloud;
+mod cloud_diff;
 mod cloud_lifecycle;
 mod cloud_lifecycle_ledger;
 mod cloud_lifecycle_types;
@@ -45,6 +46,9 @@ pub use cloud::{
     CloudErrorCategory, CloudField, CloudInvocation, CloudPrompt, CloudTaskId, CloudTaskListPage,
     CloudTaskStatus, CloudTaskSummary, CloudTaskUrl, decode_cloud_diff, decode_cloud_exec,
     decode_cloud_list, decode_cloud_status, decode_cloud_version,
+};
+pub use cloud_diff::{
+    CloudDiffReadError, CloudDiffReadErrorCategory, CloudDiffReader, DiffEligibleCloudTask,
 };
 pub use cloud_lifecycle::CloudTaskOrchestrator;
 pub use cloud_lifecycle_types::{

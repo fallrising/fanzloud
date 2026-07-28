@@ -18,12 +18,13 @@ use crate::cloud_lifecycle_ledger::{
 use crate::cloud_runner_types::{CloudSubmitObservation, CloudUnknownResolution};
 use crate::scope::OwnedCredentialScopeLease;
 use crate::{
-    CloudBranch, CloudCancellation, CloudCapture, CloudEnvironmentId, CloudLifecycle,
-    CloudLifecycleErrorCategory, CloudPrompt, CloudReconciliation, CloudRunnerConfig,
-    CloudRunnerError, CloudRunnerErrorCategory, CloudSubmission, CloudSubmitOperationId,
-    CloudSubmitRequest, CloudTaskId, CloudTaskOrchestrator, CloudTaskStatus, CloudTaskSummary,
-    CredentialScope, CredentialScopeConfig, CredentialScopeError, DuplicateRiskAcknowledgement,
-    UnknownSubmitDecision, decode_cloud_list,
+    CloudBranch, CloudCancellation, CloudCapture, CloudDiff, CloudDiffReadError,
+    CloudDiffReadErrorCategory, CloudEnvironmentId, CloudLifecycle, CloudLifecycleErrorCategory,
+    CloudPrompt, CloudReconciliation, CloudRunnerConfig, CloudRunnerError,
+    CloudRunnerErrorCategory, CloudSubmission, CloudSubmitOperationId, CloudSubmitRequest,
+    CloudTaskId, CloudTaskOrchestrator, CloudTaskStatus, CloudTaskSummary, CredentialScope,
+    CredentialScopeConfig, CredentialScopeError, DiffEligibleCloudTask,
+    DuplicateRiskAcknowledgement, UnknownSubmitDecision, decode_cloud_list,
 };
 
 const ENVIRONMENT: &str = "env_lifecycle";
@@ -423,6 +424,14 @@ impl LifecycleCloudRunner for FakeRunner {
                 Ok(CloudSubmitObservation::ExplicitlyAbandoned)
             }
         }
+    }
+
+    fn retrieve_diff(
+        &self,
+        _task: &DiffEligibleCloudTask,
+        _cancellation: CloudCancellation,
+    ) -> Result<CloudDiff, CloudDiffReadError> {
+        Err(CloudDiffReadError::new(CloudDiffReadErrorCategory::Process))
     }
 }
 

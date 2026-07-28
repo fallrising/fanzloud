@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
+use crate::cloud_lifecycle_ledger::load_lifecycle_ledger;
 use crate::cloud_runner_types::{
     CloudCancellation, CloudReconciliation, CloudRunnerConfig, CloudRunnerError,
     CloudRunnerErrorCategory, CloudSubmission, CloudSubmitObservation, CloudSubmitOperationId,
@@ -25,20 +26,45 @@ use crate::runtime::{
 };
 use crate::scope::OwnedCredentialScopeLease;
 use crate::{
-    CloudCapture, CloudInvocation, CloudTaskId, CloudTaskStatus, CredentialScope,
-    CredentialScopeError, LoginBrokerError, decode_cloud_exec, decode_cloud_list,
-    decode_cloud_status,
+    CloudCapture, CloudDiff, CloudDiffReadError, CloudDiffReadErrorCategory, CloudErrorCategory,
+    CloudField, CloudInvocation, CloudTaskId, CloudTaskStatus, CredentialScope,
+    CredentialScopeError, DiffEligibleCloudTask, LoginBrokerError, decode_cloud_diff,
+    decode_cloud_exec, decode_cloud_list, decode_cloud_status,
 };
 
 const CLOUD_CAPTURE_BYTES: usize = 64 * 1024;
+const DIFF_CAPTURE_BYTES: usize = 2 * 1024 * 1024;
 const SUBMIT_TIMEOUT: Duration = Duration::from_secs(60);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(30);
+const DIFF_TIMEOUT: Duration = Duration::from_secs(60);
 const RECONCILIATION_TIMEOUT: Duration = Duration::from_secs(60);
 const TERMINATION_GRACE: Duration = Duration::from_secs(2);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_RECONCILIATION_PAGES: usize = 5;
 const MAX_RECONCILIATION_TASKS: usize = 100;
 const DIAGNOSTIC_SENTINEL_NAME: &str = "error.log";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CloudCaptureLimits {
+    stdout: usize,
+    stderr: usize,
+}
+
+impl CloudCaptureLimits {
+    const fn standard() -> Self {
+        Self {
+            stdout: CLOUD_CAPTURE_BYTES,
+            stderr: CLOUD_CAPTURE_BYTES,
+        }
+    }
+
+    pub(crate) const fn diff() -> Self {
+        Self {
+            stdout: DIFF_CAPTURE_BYTES,
+            stderr: CLOUD_CAPTURE_BYTES,
+        }
+    }
+}
 
 /// Trusted single-operator runner for the pinned Codex Cloud submit/status/list surface.
 ///
@@ -143,25 +169,27 @@ impl CloudTaskRunner {
         }
 
         let invocation = CloudInvocation::exec(&self.environment, &self.branch, &request.prompt);
-        let mut supervisor =
-            match self
-                .runtime
-                .start(&lease, &invocation, SUBMIT_TIMEOUT, cancellation)
-            {
-                Ok(supervisor) => supervisor,
-                Err(failure) if failure.may_have_started => {
-                    self.persist_unknown(&lease, &mut ledger)?;
-                    return Err(CloudRunnerError::for_operation(
-                        CloudRunnerErrorCategory::OutcomeUnknown,
-                        operation_id,
-                    ));
-                }
-                Err(failure) => {
-                    ledger.append(CloudLedgerPhase::FailedBeforeSpawn)?;
-                    persist_cloud_ledger(lease.state_dir(), lease.runner_uid(), &ledger)?;
-                    return Err(failure.error.with_operation(operation_id));
-                }
-            };
+        let mut supervisor = match self.runtime.start(
+            &lease,
+            &invocation,
+            SUBMIT_TIMEOUT,
+            cancellation,
+            CloudCaptureLimits::standard(),
+        ) {
+            Ok(supervisor) => supervisor,
+            Err(failure) if failure.may_have_started => {
+                self.persist_unknown(&lease, &mut ledger)?;
+                return Err(CloudRunnerError::for_operation(
+                    CloudRunnerErrorCategory::OutcomeUnknown,
+                    operation_id,
+                ));
+            }
+            Err(failure) => {
+                ledger.append(CloudLedgerPhase::FailedBeforeSpawn)?;
+                persist_cloud_ledger(lease.state_dir(), lease.runner_uid(), &ledger)?;
+                return Err(failure.error.with_operation(operation_id));
+            }
+        };
 
         ledger.record_started(supervisor.process_identity())?;
         if persist_cloud_ledger(lease.state_dir(), lease.runner_uid(), &ledger).is_err() {
@@ -225,6 +253,54 @@ impl CloudTaskRunner {
         let completion = self.run_read(&lease, &invocation, STATUS_TIMEOUT)?;
         decode_cloud_status(&completion.capture)
             .map_err(|_| CloudRunnerError::new(CloudRunnerErrorCategory::ProviderOutput))
+    }
+
+    pub(crate) fn retrieve_diff(
+        &self,
+        task: &DiffEligibleCloudTask,
+        cancellation: CloudCancellation,
+    ) -> Result<CloudDiff, CloudDiffReadError> {
+        if cancellation.is_cancelled() {
+            return Err(CloudDiffReadError::new(
+                CloudDiffReadErrorCategory::Canceled,
+            ));
+        }
+        let lease = self.scope.acquire_owned().map_err(map_diff_scope_error)?;
+        self.validate_diff_authority(&lease, task)?;
+        validate_existing_diagnostic_sentinel(&lease)?;
+        self.runtime
+            .verify_version(&lease)
+            .map_err(map_diff_runner_error)?;
+        if cancellation.is_cancelled() {
+            return Err(CloudDiffReadError::new(
+                CloudDiffReadErrorCategory::Canceled,
+            ));
+        }
+        validate_existing_diagnostic_sentinel(&lease)?;
+
+        let invocation = CloudInvocation::diff(task.task_id());
+        let mut supervisor = self
+            .runtime
+            .start(
+                &lease,
+                &invocation,
+                DIFF_TIMEOUT,
+                cancellation,
+                CloudCaptureLimits::diff(),
+            )
+            .map_err(|failure| map_diff_runner_error(failure.error))?;
+        let completion = supervisor.wait().map_err(map_diff_runner_error)?;
+        match completion.end {
+            CloudCommandEnd::Exited => {
+                decode_cloud_diff(&completion.capture).map_err(map_diff_adapter_error)
+            }
+            CloudCommandEnd::TimedOut => {
+                Err(CloudDiffReadError::new(CloudDiffReadErrorCategory::Timeout))
+            }
+            CloudCommandEnd::Canceled => Err(CloudDiffReadError::new(
+                CloudDiffReadErrorCategory::Canceled,
+            )),
+        }
     }
 
     /// Lists bounded candidates for the current unknown submission without authorizing a retry.
@@ -450,6 +526,63 @@ impl CloudTaskRunner {
         }
     }
 
+    fn validate_diff_authority(
+        &self,
+        lease: &OwnedCredentialScopeLease,
+        task: &DiffEligibleCloudTask,
+    ) -> Result<(), CloudDiffReadError> {
+        let lifecycle = load_lifecycle_ledger(lease.state_dir(), lease.runner_uid())
+            .map_err(|_| CloudDiffReadError::new(CloudDiffReadErrorCategory::AuthorityMismatch))?
+            .ok_or_else(|| {
+                CloudDiffReadError::new(CloudDiffReadErrorCategory::IneligibleLifecycle)
+            })?;
+        let lifecycle = lifecycle
+            .lifecycle()
+            .map_err(|_| CloudDiffReadError::new(CloudDiffReadErrorCategory::AuthorityMismatch))?;
+        match lifecycle {
+            crate::CloudLifecycle::Ready {
+                operation_id,
+                task_id,
+            }
+            | crate::CloudLifecycle::Applied {
+                operation_id,
+                task_id,
+            } if operation_id == task.operation_id() && &task_id == task.task_id() => {}
+            crate::CloudLifecycle::Ready { .. } | crate::CloudLifecycle::Applied { .. } => {
+                return Err(CloudDiffReadError::new(
+                    CloudDiffReadErrorCategory::AuthorityMismatch,
+                ));
+            }
+            _ => {
+                return Err(CloudDiffReadError::new(
+                    CloudDiffReadErrorCategory::IneligibleLifecycle,
+                ));
+            }
+        }
+
+        let submit = load_cloud_ledger(lease.state_dir(), lease.runner_uid())
+            .map_err(|_| CloudDiffReadError::new(CloudDiffReadErrorCategory::AuthorityMismatch))?
+            .ok_or_else(|| {
+                CloudDiffReadError::new(CloudDiffReadErrorCategory::AuthorityMismatch)
+            })?;
+        let recorded_task = submit
+            .recorded_task()
+            .map_err(|_| CloudDiffReadError::new(CloudDiffReadErrorCategory::AuthorityMismatch))?;
+        if submit.operation_id() != task.operation_id()
+            || !submit.matches_config(&self.environment, &self.branch)
+            || !matches!(
+                submit.latest(),
+                CloudLedgerPhase::TaskRecorded | CloudLedgerPhase::TaskAdopted
+            )
+            || recorded_task.as_ref() != Some(task.task_id())
+        {
+            return Err(CloudDiffReadError::new(
+                CloudDiffReadErrorCategory::AuthorityMismatch,
+            ));
+        }
+        Ok(())
+    }
+
     fn dispatch_existing(
         &self,
         requested: CloudSubmitOperationId,
@@ -571,7 +704,13 @@ impl CloudTaskRunner {
     ) -> Result<CloudCommandCompletion, CloudRunnerError> {
         let mut supervisor = self
             .runtime
-            .start(lease, invocation, timeout, CloudCancellation::new())
+            .start(
+                lease,
+                invocation,
+                timeout,
+                CloudCancellation::new(),
+                CloudCaptureLimits::standard(),
+            )
             .map_err(|failure| failure.error)?;
         let completion = supervisor.wait()?;
         match completion.end {
@@ -634,6 +773,46 @@ fn map_runtime_error(error: LoginBrokerError) -> CloudRunnerError {
     CloudRunnerError::new(category)
 }
 
+fn map_diff_scope_error(error: CredentialScopeError) -> CloudDiffReadError {
+    let category = if matches!(error, CredentialScopeError::LoginAlreadyRunning) {
+        CloudDiffReadErrorCategory::Busy
+    } else {
+        CloudDiffReadErrorCategory::Scope
+    };
+    CloudDiffReadError::new(category)
+}
+
+fn map_diff_runner_error(error: CloudRunnerError) -> CloudDiffReadError {
+    let category = match error.category() {
+        CloudRunnerErrorCategory::Scope => CloudDiffReadErrorCategory::Scope,
+        CloudRunnerErrorCategory::Busy => CloudDiffReadErrorCategory::Busy,
+        CloudRunnerErrorCategory::Version => CloudDiffReadErrorCategory::Version,
+        CloudRunnerErrorCategory::DiagnosticBoundary => {
+            CloudDiffReadErrorCategory::DiagnosticBoundary
+        }
+        CloudRunnerErrorCategory::Timeout => CloudDiffReadErrorCategory::Timeout,
+        _ => CloudDiffReadErrorCategory::Process,
+    };
+    CloudDiffReadError::new(category)
+}
+
+fn map_diff_adapter_error(error: crate::CloudAdapterError) -> CloudDiffReadError {
+    let category = match (error.field(), error.category()) {
+        (
+            CloudField::Stdout | CloudField::Stderr,
+            CloudErrorCategory::Overflow
+            | CloudErrorCategory::TooLong
+            | CloudErrorCategory::LimitExceeded,
+        ) => CloudDiffReadErrorCategory::OutputLimit,
+        (
+            CloudField::Diff,
+            CloudErrorCategory::InvalidUtf8 | CloudErrorCategory::ControlCharacter,
+        ) => CloudDiffReadErrorCategory::InvalidDiff,
+        _ => CloudDiffReadErrorCategory::ProviderDrift,
+    };
+    CloudDiffReadError::new(category)
+}
+
 fn ensure_diagnostic_sentinel(lease: &OwnedCredentialScopeLease) -> Result<(), CloudRunnerError> {
     #[cfg(not(target_os = "linux"))]
     {
@@ -666,15 +845,40 @@ fn ensure_diagnostic_sentinel(lease: &OwnedCredentialScopeLease) -> Result<(), C
             }
         }
 
-        let mut options = OpenOptions::new();
-        options
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
-        let directory = options
-            .open(path)
-            .map_err(|_| CloudRunnerError::new(CloudRunnerErrorCategory::DiagnosticBoundary))?;
-        validate_diagnostic_sentinel(&directory, lease.runner_uid())
+        open_and_validate_diagnostic_sentinel(&path, lease.runner_uid())
     }
+}
+
+fn validate_existing_diagnostic_sentinel(
+    lease: &OwnedCredentialScopeLease,
+) -> Result<(), CloudDiffReadError> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = lease;
+        Err(CloudDiffReadError::new(CloudDiffReadErrorCategory::Scope))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let path = lease.working_dir().join(DIAGNOSTIC_SENTINEL_NAME);
+        open_and_validate_diagnostic_sentinel(&path, lease.runner_uid())
+            .map_err(|_| CloudDiffReadError::new(CloudDiffReadErrorCategory::DiagnosticBoundary))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_and_validate_diagnostic_sentinel(
+    path: &std::path::Path,
+    runner_uid: u32,
+) -> Result<(), CloudRunnerError> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let directory = options
+        .open(path)
+        .map_err(|_| CloudRunnerError::new(CloudRunnerErrorCategory::DiagnosticBoundary))?;
+    validate_diagnostic_sentinel(&directory, runner_uid)
 }
 
 #[cfg(target_os = "linux")]
@@ -704,6 +908,7 @@ pub(crate) trait CloudCliRuntime: Send + Sync {
         invocation: &CloudInvocation,
         timeout: Duration,
         cancellation: CloudCancellation,
+        capture_limits: CloudCaptureLimits,
     ) -> Result<Box<dyn CloudCommandSupervisor>, CloudStartFailure>;
 }
 
@@ -754,6 +959,7 @@ impl CloudCliRuntime for ProcessCloudRuntime {
         invocation: &CloudInvocation,
         timeout: Duration,
         cancellation: CloudCancellation,
+        capture_limits: CloudCaptureLimits,
     ) -> Result<Box<dyn CloudCommandSupervisor>, CloudStartFailure> {
         let invocation = lease
             .cloud_invocation(invocation)
@@ -787,8 +993,8 @@ impl CloudCliRuntime for ProcessCloudRuntime {
                 may_have_started: true,
             }
         })?;
-        let stdout_capture = SharedCapture::with_limit(CLOUD_CAPTURE_BYTES);
-        let stderr_capture = SharedCapture::with_limit(CLOUD_CAPTURE_BYTES);
+        let stdout_capture = SharedCapture::with_limit(capture_limits.stdout);
+        let stderr_capture = SharedCapture::with_limit(capture_limits.stderr);
         let stdout_thread = drain_stream(stdout, stdout_capture.clone());
         let stderr_thread = drain_stream(stderr, stderr_capture.clone());
 
