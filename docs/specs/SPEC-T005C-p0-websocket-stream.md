@@ -1,7 +1,7 @@
 ---
 id: SPEC-T005C
 title: P0 replay-then-live WebSocket stream
-status: draft
+status: ready
 contract_unit: CU-API-P0-02
 module: codebox-control-plane
 milestone: P0
@@ -230,5 +230,5 @@ None. ADR-0004 defines P0 replay retention, gap handling, authentication, and no
 
 # Self-Check
 
-Draft pending T005A/T005B acceptance and fresh design acceptance. No T005C production
-implementation is authorized.
+T005A and T005B are Accepted. T005C is Ready for its required fresh design audit and
+skeleton-first implementation; no T005C production implementation is authorized.

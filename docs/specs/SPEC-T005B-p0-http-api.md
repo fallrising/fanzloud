@@ -1,7 +1,7 @@
 ---
 id: SPEC-T005B
 title: Authenticated P0 login and session HTTP API
-status: ready
+status: accepted
 contract_unit: CU-API-P0-01
 module: codebox-control-plane
 milestone: P0
@@ -620,10 +620,10 @@ standalone `GET /session` schema before starting the turn.
 
 | Command or check | Result | Evidence URI or hash |
 |---|---|---|
-| Skeleton compile before production | Pending | T005B commit |
-| Focused/concurrent/security tests | Pending | ACCEPT-T005B |
-| Workspace gates | Pending | ACCEPT-T005B |
-| Fresh acceptance review | Pending | ACCEPT-T005B |
+| Skeleton compile before production | Passed | `5852fa7` |
+| Focused/concurrent/security tests | Passed: 19 tests, 10 repeated package runs | ACCEPT-T005B |
+| Workspace gates | Passed: fmt, Clippy, 161 tests, bins, deny, diff | ACCEPT-T005B |
+| Fresh acceptance review | `IMPLEMENTATION ACCEPTED` | ACCEPT-T005B |
 
 # Traceability
 
@@ -635,7 +635,10 @@ None. ADR-0004 defines the P0 app-auth, routes, idempotency lifetime, and instan
 
 # Self-Check
 
-T005A is Accepted. Three T005B-specific fresh reviews repaired seven public-origin,
+T005A is Accepted. Three T005B-specific design reviews repaired seven public-origin,
 configuration/expiry, shutdown, fake-port, route-schema, and error-mapping blockers plus two
-residual documentation contradictions. The final fresh review returned `DESIGN ACCEPTED`; T005B is
-Ready for skeleton-first implementation.
+residual documentation contradictions. Implementation reviews then repaired authentication work
+coverage, disconnect/replay fidelity, exact lower-error coverage, bootstrap/shutdown admission,
+UUID classification, and a concurrent logout race. All 19 tests and workspace gates pass; the
+final fresh-context read-only review returned `IMPLEMENTATION ACCEPTED`. T005B is Accepted and
+T005C is the sole Ready task.
