@@ -1,0 +1,21 @@
+{
+  "cursor": "cursor_synthetic_next",
+  "tasks": [
+    {
+      "attempt_total": 1,
+      "environment_id": "env_synthetic",
+      "environment_label": "private-environment",
+      "id": "task_i_abc123",
+      "is_review": false,
+      "status": "ready",
+      "summary": {
+        "files_changed": 1,
+        "lines_added": 5,
+        "lines_removed": 1
+      },
+      "title": "Synthetic documentation update",
+      "updated_at": "2026-07-27T12:00:00Z",
+      "url": "https://chatgpt.com/codex/tasks/task_i_abc123"
+    }
+  ]
+}

@@ -365,6 +365,7 @@ codebox/
 │   ├── agent-native/
 │   ├── agent-acp/
 │   ├── agent-process/
+│   ├── agent-codex/
 │   ├── model-provider/
 │   ├── provider-openai/
 │   ├── provider-anthropic/
@@ -1561,7 +1562,7 @@ This is the initial P1 contract inventory. The LLM MAY add CUs when a public bou
 | CU | Boundary | Module | Archetype | Atomicity | Key invariants |
 |---|---|---|---|---|---|
 | CU-AUTH-P0-01 | Official CLI device-login lifecycle | agent-codex | D+F | E2 | INV-007, INV-010 |
-| CU-AUTH-P0-02 | Credential scope lease and isolation | secret-store/agent-codex | B+E | E1 | INV-007 |
+| CU-AUTH-P0-02 | Credential scope lease and isolation | agent-codex | B+E | E1 | INV-007 |
 | CU-AGT-P0-01 | Codex Cloud CLI output decoder | agent-codex | D+F | E0 | Redaction, bounded output |
 | CU-AGT-P0-02 | Codex Cloud task lifecycle | agent-codex | C+D | E2 | INV-005, INV-006, INV-012 |
 | CU-CLOUD-P0-01 | Submit and inspect provider-managed task | agent-codex | C+F | E2 | INV-001, INV-002, INV-007 |
@@ -1609,9 +1610,11 @@ ADR-0002 inserts this fast path before the original P1 foundation:
 flowchart TD
     T000[T000 Bootstrap Workspace] --> T001[T001 P0 Subscription Boundary]
     T000 --> T010[T010 Strong IDs and Errors]
-    T001 --> T002[T002 Codex Login Broker]
-    T001 --> T003[T003 Codex Cloud CLI Adapter]
-    T010 --> T002
+    T001 --> T002A[T002A Credential Scope]
+    T010 --> T002A
+    T002A --> T002B[T002B Device Login]
+    T002B --> T002[T002 Login Broker Parent]
+    T001 --> T003[T003 Codex Cloud Contract Adapter]
     T010 --> T003
     T002 --> T004[T004 Codex Cloud Task Orchestrator]
     T003 --> T004
@@ -1623,9 +1626,11 @@ flowchart TD
 | ID | Outcome | CUs | Dependencies | Machine acceptance |
 |---|---|---|---|---|
 | T001 | Personal BYOS boundary, ADR, CU inventory, and executable task graph | P0 CU inventory | T000 | Documentation reference and consistency checks |
-| T002 | Version-pinned Codex device-login broker and isolated credential scope | CU-AUTH-P0-01, CU-AUTH-P0-02 | T001,T010 | Fake CLI login lifecycle, concurrency, permission, and secret-canary tests |
-| T003 | Version-pinned Codex Cloud CLI adapter | CU-AGT-P0-01, CU-AGT-P0-02, CU-BKD-01 | T001,T010 | Recorded fixtures, malformed output, argv injection, version, task-status, and conformance tests |
-| T004 | Codex Cloud task submit/status/diff orchestrator for an administrator-configured environment | CU-CLOUD-P0-01, CU-CLOUD-P0-02 | T002,T003 | Fake CLI lifecycle, uncertain-submit reconciliation, diff, redaction, and no-local-execution tests |
+| T002A | Isolated credential scope and E1 lease | CU-AUTH-P0-02 | T001,T010 | Permission, ownership, repository-boundary, concurrency, and secret-canary tests |
+| T002B | Version-pinned Codex device-login lifecycle | CU-AUTH-P0-01 | T002A | Fixture parser, lifecycle, process supervision, crash reconciliation, and redaction tests |
+| T002 | Accepted login-broker parent | CU-AUTH-P0-01, CU-AUTH-P0-02 | T002A,T002B | Both child acceptances plus combined workspace and P14 security gates |
+| T003 | Version-pinned Codex Cloud fixed-command and output decoder | CU-AGT-P0-01 | T001,T010 | Source-derived fixtures, malformed output, argv injection, version, task-status, list, diff-bound, and redaction tests |
+| T004 | Codex Cloud lifecycle, diff, and backend integration parent for an administrator-configured environment | CU-AGT-P0-02, CU-CLOUD-P0-01, CU-CLOUD-P0-02, CU-BKD-01 | T002,T003 | Decomposed E2 lifecycle, E0 diff, and E3 backend-conformance child acceptances plus no-local-execution gates |
 | T005 | P0 login/session HTTP API and replayable live stream | CU-SES-P0-01, CU-API-P0-01, CU-API-P0-02 | T004 | HTTP, ordering, reconnect, cancel, cleanup, and redaction contract tests |
 | T006 | Private single-page operator flow | CU-WEB-P0-01 | T005 | Browser login-status, prompt, streaming, cancel, diff, refresh, and no-secret tests |
 | T007 | Deterministic and live subscription end-to-end acceptance | All P0 CUs | T006 | Fake-Codex CI E2E plus one operator-authenticated live smoke |
@@ -1992,9 +1997,13 @@ After T000 and T010 are Accepted, prioritize the independent P0 slice:
 
 ```text
 T001 P0 Subscription Boundary
-  ├→ T002 Codex Login Broker
+  ├→ T002A Credential Scope
+  │     ↓
+  │   T002B Device Login
+  │     ↓
+  │   T002 Login Broker Parent
   └→ T003 Codex Cloud CLI Adapter
-       ↓
+        ↓
 T004 Codex Cloud Task Orchestrator
   ↓
 T005 Session API and Stream

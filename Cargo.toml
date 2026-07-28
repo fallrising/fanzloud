@@ -4,6 +4,7 @@ members = [
     "apps/codebox-cli",
     "apps/control-plane",
     "apps/node-agent",
+    "crates/codebox-agent-codex",
     "crates/codebox-domain",
 ]
 resolver = "3"

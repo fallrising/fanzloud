@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "cliVersion": "0.145.0",
+  "deviceLogin": {
+    "instructionsStream": "stdout",
+    "instructionsAreTerminal": false,
+    "successStderrFixture": "device-login.success.stderr",
+    "successExitCode": 0,
+    "failureExitCode": 1,
+    "pollTimeoutSeconds": 900
+  },
+  "loginStatus": [
+    {
+      "state": "loggedInChatgpt",
+      "stderrFixture": "login-status.chatgpt.stderr",
+      "exitCode": 0
+    },
+    {
+      "state": "loggedOut",
+      "stderrFixture": "login-status.logged-out.stderr",
+      "exitCode": 1
+    }
+  ]
+}

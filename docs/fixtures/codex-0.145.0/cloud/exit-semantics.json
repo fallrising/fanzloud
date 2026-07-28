@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "commands": {
+    "exec": {
+      "success": 0
+    },
+    "status": {
+      "pending": 1,
+      "ready": 0,
+      "applied": 1,
+      "error": 1
+    },
+    "list": {
+      "success": 0
+    },
+    "diff": {
+      "success": 0
+    }
+  }
+}

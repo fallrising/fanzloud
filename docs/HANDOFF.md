@@ -4,113 +4,154 @@ Date: 2026-07-27
 
 ## Current Goal
 
-Deliver a private, single-operator P0 that lets the project owner operate their own ChatGPT/Codex
-subscription through a Codebox web control layer.
-
-The first slice uses provider-managed Codex Cloud tasks rather than local `codex exec`. This keeps
-the local subscription credential runner separate from repository-controlled execution.
+Deliver the private, single-operator P0 that lets the project owner operate their own ChatGPT/Codex
+subscription through a Codebox web control layer. Repository-controlled work remains in
+provider-managed Codex Cloud; the local trusted runner must never check out or execute repository
+code beside `CODEX_HOME`.
 
 ## Repository State
 
 Branch: `main`
 
-Local commits:
+`HEAD` and `origin/main` currently point to:
 
 ```text
-9f1bbcc docs: specify Codex login boundary
-aa56b75 feat: add domain value foundation
-f9f3e2d docs: save development handoff
-9d45850 docs: prioritize personal Codex cloud BYOS slice
-d605028 docs: record T000 verification evidence
-76f72b3 chore: bootstrap codebox workspace
+4a06ad2 docs: record T002 CI evidence
 ```
 
-The pushed remote state is `9f1bbcc` (`main -> origin/main`). T010's hosted CI run
-`30262687153` and T002 documentation CI run `30263626003` passed; T010 remains `verifying` only
-because fresh acceptance review is pending.
+The working tree contains the coherent, uncommitted T001/T010 acceptance updates, T002A/T002B/T002
+implementation and acceptance, and T003 Ready design described below. No commit or push was made in
+this session. Preserve these changes and inspect `git status` before editing.
 
-The configured remote is `git@github.com:fallrising/fanzloud.git`; `origin/main` points to
-`9f1bbcc`.
+No hosted CI run exists for the current uncommitted implementation. Earlier hosted runs remain
+historical evidence only.
 
-## Completed
+## Accepted in This Working Tree
 
-- T000 Rust workspace bootstrap implementation.
-- Four inert binary packages: control plane, node agent, boxd, and CLI.
-- Rust `1.97.1` and `cargo-deny 0.19.4` pins.
-- Formatting, Clippy, test, build, dependency-policy, and CI configuration.
-- All five T000 commands passed against clean commit `76f72b3`.
-- Hosted GitHub Actions run `30260756940` passed all five T000 commands; T000 is accepted.
-- ADR-0001 infrastructure-only task exception.
-- Accepted ADR-0002 personal BYOS Codex P0.
-- P0 Contract Unit inventory and T001–T007 task graph.
-- Claude reviewed ADR-0002 twice. The initial local-exec design was rejected because Codex's local
-  sandbox must not be relied on to prevent credential reads. The revised Codex Cloud design passed
-  content review.
-- T010 domain implementation: strong UUID IDs, validated `WorkspacePath`, `EventSeq`, typed
-  errors, serde validation, and compile-fail coverage. Local executable acceptance passed.
-- T010 hosted CI run `30262687153` passed all workflow gates.
-- T002 login broker contract draft records the trusted `CODEX_HOME` boundary and an explicit
-  `[TD-GAP]` for pinned-CLI device-code output and exit semantics; no production login code was
-  written while that gap remains.
-- T002 documentation CI run `30263626003` passed all workflow gates.
+### T001 and T010
 
-## Verified Official Codex Surface
+- Fresh, read-only Claude Code 2.1.220 acceptance reviews returned `ACCEPTED`.
+- Task, acceptance, and traceability records now mark both tasks Accepted.
+- Existing T010 local and hosted evidence was retained rather than reimplemented.
 
-- Current stable npm package inspected: `@openai/codex@0.145.0`.
-- ChatGPT sign-in provides subscription-backed Codex access.
-- Headless login supports `codex login --device-auth`.
-- The pinned CLI exposes experimental:
-  - `codex cloud exec`
-  - `codex cloud status`
-  - `codex cloud list --json`
-  - `codex cloud diff`
-- P0 must pin the CLI version and contract-test captured output because the cloud commands are
-  experimental.
+### T002A — credential scope and E1 lease
 
-## Decided P0 Flow
+- Added the `codebox-agent-codex` workspace crate.
+- Validates absolute canonical Linux paths, ownership/modes, symlinks, repository ancestry, and
+  directory overlap.
+- Exposes only fixed version/login-status/device-login argv and cleared-environment policy.
+- Uses a mode-`0600`, descriptor-validated, nonblocking `flock` lease.
+- Never reads `auth.json` or starts Codex.
+- One unit test plus 12 integration contract/security tests pass.
+- Fresh Claude acceptance returned `ACCEPTED`.
+
+### T002B — E2 device-login lifecycle
+
+- Pinned exact Codex CLI `0.145.0` version, login-status, device-prompt, and completion fixtures.
+- Added typed redacted login values/errors, a fail-closed preflight, a versioned durable ledger,
+  PID/start-time reconciliation, and no-automatic-retry handling for unknown outcomes.
+- Added a dedicated non-pooled child supervisor with bounded background draining, process-group
+  cancellation, instruction/overall deadlines, direct-child reap, and Linux
+  `PR_SET_PDEATHSIG` race closure.
+- Added 22 T002B unit tests; with the retained T002A owner-policy test the crate reports 23 unit
+  tests, plus the 12 T002A integration tests.
+- Fresh Claude acceptance returned `ACCEPTED` with no blocker.
+
+Non-blocking T002B observations are recorded in `ACCEPT-T002B`: direct ANSI-SGR test coverage,
+explicit reconciliation after normally exited malformed output, and fully joining both drainer
+handles after the first join error are possible later refinements. They do not weaken fail-closed
+behavior or leave a runnable child.
+
+### T002 parent
+
+- T002 is a coordination parent because CU-AUTH-P0-02 is E1 and CU-AUTH-P0-01 is E2.
+- Both children and the combined workspace/P14 gates pass.
+- A separate fresh composition review returned `ACCEPTED`.
+
+## Current Ready Task
+
+Exactly one task is Ready:
 
 ```text
-Private operator browser
-→ Codebox control plane
-→ trusted credential runner with operator-owned CODEX_HOME
-→ pinned Codex Cloud CLI
-→ OpenAI-managed Codex Cloud environment and repository
-→ normalized status and final diff
+T003 — pinned Codex Cloud contract adapter
+CU-AGT-P0-01
+archetypes D+F
+atomicity E0
 ```
 
-The credential runner must never check out repositories or run repository-controlled commands.
-Codex Cloud environment ID and branch are administrator configuration, not browser-controlled input.
+T003 is intentionally side-effect free. It owns typed values, fixed argv, and decoders for completed
+bounded captures. It does not start a process, read credentials, submit/poll a task, reconcile an
+unknown submission, implement `AgentBackend`, or apply a diff.
 
-## Current Blockers
+The original T003 seed mixed E0, E2, and E3 CUs. TD §9.3 required correction:
 
-1. T001 remains `verifying` until its fresh document-first acceptance review returns a report.
-2. T010 remains `verifying` for the same acceptance-process reason; its executable checks pass.
-3. T002 is `blocked` on T001/T010 acceptance and the device-code output/exit-semantics `[TD-GAP]`.
-4. No implementation changes are currently uncommitted; only fresh acceptance review and T002
-   contract resolution remain.
+- T003 retains CU-AGT-P0-01 E0.
+- CU-AGT-P0-02 E2 and CU-BKD-01 E3 move to the future T004 parent.
+- T004 also owns CU-CLOUD-P0-01 E2 and CU-CLOUD-P0-02 E0 and must be decomposed into separate
+  atomicity-specific children before any T004 implementation.
 
-## Next Session
+## Verified Pinned Cloud Surface
 
-1. Obtain fresh read-only Claude acceptance reports for T001 and T010, then mark accepted if clear.
-2. Resolve the T002 `[TD-GAP]` with a pinned CLI fixture or an ADR/specification decision.
-3. Write T002/T003 tests and implementation after their contracts are Ready.
-4. Implement:
-   - T002 Codex login broker
-   - T003 pinned Codex Cloud CLI adapter
-   - T004 cloud task orchestrator
-   - T005 session API and stream
-   - T006 minimal private web UI
-   - T007 deterministic and live subscription E2E
+The official `rust-v0.145.0` source and local pinned CLI help establish:
 
-Do not revert to local `codex exec` beside `CODEX_HOME` unless a new ADR provides a proven
-credential-read isolation mechanism.
+- `cloud exec` succeeds by printing one task URL.
+- `cloud status` prints three human-readable lines; only `READY` exits zero.
+- `cloud list --json` emits the exact structured page recorded by the synthetic fixture.
+- `cloud diff` prints an untrusted raw unified diff.
+- `cloud apply` exists and is forbidden because it mutates a local working tree.
+- The upstream cloud implementation may append account/diagnostic metadata to cwd-relative
+  `error.log`; T004 must use the private trusted T002A working directory and never publish that file.
 
-## Validation Commands
+The source-derived fixtures under `docs/fixtures/codex-0.145.0/cloud/` contain no live credential,
+account, repository, task, or user prompt.
 
-```bash
+Claude reviewed four T003 design revisions. The reviews found and removed:
+
+- a missing list `url` field and URL/row-ID consistency rule;
+- the upstream literal `-` stdin sentinel;
+- missing Archetype D ownership answers;
+- non-TTY status fixture spacing drift;
+- missing numeric ceilings;
+- missing property-based chunk-partition and missing-exit test skeletons; and
+- unclear P14/P15 ownership.
+
+The fourth fresh review returned `DESIGN ACCEPTED` with no blocker.
+
+## Next Work
+
+Work only on T003:
+
+1. Read `docs/tasks/T003.task.md` and `docs/specs/SPEC-T003-codex-cloud-contract.md`.
+2. Generate every named T003 test skeleton before production edits.
+3. Implement the smallest E0 addition in `codebox-agent-codex`:
+   - bounded strong values and redacted errors/debug;
+   - non-extensible version/exec/status/list/diff argv;
+   - exact completed-capture decoders;
+   - no process, credential, retry, apply, or repository-execution surface.
+4. Run focused tests/Clippy, then all workspace gates and `cargo deny check`.
+5. Update rustdoc, specification evidence, task status, traceability, and request a fresh
+   document-first acceptance review.
+6. Only after T003 is Accepted, decompose the mixed-atomicity T004 parent before writing T004 code.
+
+Do not re-run T001/T010/T002 acceptance work unless their relevant files or behavior change.
+
+## Validation Evidence
+
+The current working tree passed:
+
+```text
 cargo fmt --all -- --check
+cargo test -p codebox-agent-codex --all-features
+  23 unit tests + 12 integration tests passed
+cargo clippy -p codebox-agent-codex --all-targets --all-features -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
 cargo build --workspace --bins --all-features
 cargo deny check
+  advisories ok, bans ok, licenses ok, sources ok
+git diff --check
 ```
+
+`cargo deny check` requires access to the user advisory-cache lock in this environment and was run
+with the approved permission. All other listed commands passed locally without a hosted result being
+claimed.
