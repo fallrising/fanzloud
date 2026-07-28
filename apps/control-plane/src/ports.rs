@@ -6,8 +6,10 @@ use codebox_agent_codex::{
     CloudDiff, CloudPrompt, CloudSubmitOperationId, LoginBroker, LoginBrokerError,
     LoginOperationId, LoginStatus, UnknownSubmitDecision,
 };
+use codebox_domain::{EventSeq, SessionId};
 use codebox_session_runtime::{
-    P0Actor, P0RecoveryCandidates, P0SessionError, P0SessionIdentity, P0SessionRuntime,
+    P0Actor, P0LiveReceiveError, P0LiveReceiver, P0RecoveryCandidates, P0SessionError,
+    P0SessionErrorCategory, P0SessionEventEnvelope, P0SessionIdentity, P0SessionRuntime,
     P0SessionSnapshot, P0TurnReceipt,
 };
 
@@ -31,7 +33,78 @@ pub(crate) trait SessionPort: Send + Sync {
         decision: UnknownSubmitDecision,
     ) -> Result<P0SessionSnapshot, SessionPortError>;
     fn read_diff(&self) -> Result<CloudDiff, SessionPortError>;
+    fn subscribe(
+        &self,
+        session_id: SessionId,
+        after_seq: EventSeq,
+    ) -> Result<SessionSubscription, SessionSubscribeError>;
     fn shutdown(&self) -> Result<(), SessionPortError>;
+}
+
+pub(crate) struct SessionSubscription {
+    pub(crate) replay: Vec<P0SessionEventEnvelope>,
+    pub(crate) snapshot: P0SessionSnapshot,
+    pub(crate) live: Box<dyn LiveEventPort>,
+}
+
+pub(crate) trait LiveEventPort: Send {
+    fn try_recv(&self) -> Result<P0SessionEventEnvelope, LiveEventError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LiveEventError {
+    Empty,
+    Lagged,
+    RuntimeStopped,
+    Closed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SessionSubscribeErrorCategory {
+    WrongSession,
+    HistoryGap,
+    FutureCursor,
+    SubscriberLimit,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SessionSubscribeError {
+    pub(crate) category: SessionSubscribeErrorCategory,
+    pub(crate) oldest_available: Option<EventSeq>,
+    pub(crate) latest_available: Option<EventSeq>,
+}
+
+impl SessionSubscribeError {
+    #[cfg(test)]
+    pub(crate) const fn new(
+        category: SessionSubscribeErrorCategory,
+        oldest_available: Option<EventSeq>,
+        latest_available: Option<EventSeq>,
+    ) -> Self {
+        Self {
+            category,
+            oldest_available,
+            latest_available,
+        }
+    }
+
+    fn from_session(error: &P0SessionError) -> Self {
+        let category = match error.category() {
+            P0SessionErrorCategory::WrongSession => SessionSubscribeErrorCategory::WrongSession,
+            P0SessionErrorCategory::HistoryGap => SessionSubscribeErrorCategory::HistoryGap,
+            P0SessionErrorCategory::FutureCursor => SessionSubscribeErrorCategory::FutureCursor,
+            P0SessionErrorCategory::SubscriberLimit => {
+                SessionSubscribeErrorCategory::SubscriberLimit
+            }
+            _ => SessionSubscribeErrorCategory::Unavailable,
+        };
+        Self {
+            category,
+            oldest_available: error.oldest_available(),
+            latest_available: error.latest_available(),
+        }
+    }
 }
 
 pub(crate) struct LoginInstructions {
@@ -195,7 +268,37 @@ impl SessionPort for ConcreteSessionPort {
         self.runtime.read_diff().map_err(SessionPortError::Lower)
     }
 
+    fn subscribe(
+        &self,
+        session_id: SessionId,
+        after_seq: EventSeq,
+    ) -> Result<SessionSubscription, SessionSubscribeError> {
+        let subscription = self
+            .runtime
+            .subscribe(session_id, after_seq)
+            .map_err(|error| SessionSubscribeError::from_session(&error))?;
+        let (replay, snapshot, live) = subscription.into_parts();
+        Ok(SessionSubscription {
+            replay,
+            snapshot,
+            live: Box::new(ConcreteLiveReceiver(live)),
+        })
+    }
+
     fn shutdown(&self) -> Result<(), SessionPortError> {
         self.runtime.shutdown().map_err(SessionPortError::Lower)
+    }
+}
+
+struct ConcreteLiveReceiver(P0LiveReceiver);
+
+impl LiveEventPort for ConcreteLiveReceiver {
+    fn try_recv(&self) -> Result<P0SessionEventEnvelope, LiveEventError> {
+        self.0.try_recv().map_err(|error| match error {
+            P0LiveReceiveError::Empty => LiveEventError::Empty,
+            P0LiveReceiveError::Lagged => LiveEventError::Lagged,
+            P0LiveReceiveError::RuntimeStopped => LiveEventError::RuntimeStopped,
+            P0LiveReceiveError::Closed => LiveEventError::Closed,
+        })
     }
 }

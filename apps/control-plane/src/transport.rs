@@ -1,6 +1,6 @@
 use axum::body::Body;
 use axum::http::{
-    HeaderName, HeaderValue, Response, StatusCode,
+    HeaderMap, HeaderName, HeaderValue, Response, StatusCode,
     header::{
         CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_SECURITY_POLICY, CONTENT_TYPE, SET_COOKIE,
     },
@@ -120,4 +120,9 @@ fn common_headers(content_type: Option<&'static str>) -> Vec<(HeaderName, Header
         headers.push((CONTENT_TYPE, HeaderValue::from_static(content_type)));
     }
     headers
+}
+
+pub(crate) fn add_common_security_headers(headers: &mut HeaderMap) {
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(NOSNIFF, HeaderValue::from_static("nosniff"));
 }

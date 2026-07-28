@@ -12,6 +12,7 @@ mod routes;
 mod state;
 mod transport;
 mod types;
+mod websocket;
 
 pub use config::{
     OperatorBootstrapToken, P0HttpConfig, P0HttpConfigError, P0HttpConfigField, P0PublicOrigin,

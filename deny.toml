@@ -22,6 +22,13 @@ private = { ignore = true }
 multiple-versions = "deny"
 wildcards = "deny"
 highlight = "all"
+# Axum 0.8.9's pinned tungstenite stack uses getrandom 0.3/r-efi 5 while the
+# accepted UUID stack uses getrandom 0.4/r-efi 6. Keep this exception exact and
+# transitive; workspace manifests continue to reject wildcard dependencies.
+skip = [
+    { name = "getrandom", version = "=0.3.4" },
+    { name = "r-efi", version = "=5.3.0" },
+]
 
 [sources]
 unknown-registry = "deny"

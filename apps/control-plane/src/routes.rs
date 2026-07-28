@@ -34,6 +34,7 @@ const ROUTE_SESSION_CANCEL: &str = "/api/p0/v1/session/cancel";
 const ROUTE_SESSION_RECONCILE: &str = "/api/p0/v1/session/reconcile";
 const ROUTE_SESSION_RESOLVE: &str = "/api/p0/v1/session/resolve";
 const ROUTE_SESSION_DIFF: &str = "/api/p0/v1/session/diff";
+const ROUTE_SESSION_STREAM: &str = "/api/p0/v1/session/stream";
 
 pub(crate) fn router(shared: Arc<Shared>) -> Router {
     Router::new()
@@ -50,6 +51,7 @@ pub(crate) fn router(shared: Arc<Shared>) -> Router {
         .route(ROUTE_SESSION_RECONCILE, post(reconcile))
         .route(ROUTE_SESSION_RESOLVE, post(resolve))
         .route(ROUTE_SESSION_DIFF, get(session_diff))
+        .route(ROUTE_SESSION_STREAM, get(crate::websocket::upgrade))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(shared)
@@ -399,7 +401,7 @@ fn static_method_name(method: &Method) -> &'static str {
     }
 }
 
-fn validate_headers(headers: &HeaderMap) -> Result<(), ApiError> {
+pub(crate) fn validate_headers(headers: &HeaderMap) -> Result<(), ApiError> {
     if headers
         .values()
         .any(|value| value.as_bytes().len() > MAX_HEADER_BYTES)

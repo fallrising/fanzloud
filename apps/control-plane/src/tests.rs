@@ -1,9 +1,18 @@
+use std::collections::VecDeque;
 use std::convert::Infallible;
+use std::future::Future;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::PermissionsExt;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -11,23 +20,31 @@ use axum::http::{
     HeaderMap, HeaderValue, Method, Request, StatusCode,
     header::{
         AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, ORIGIN,
-        SET_COOKIE,
+        SEC_WEBSOCKET_VERSION, SET_COOKIE, UPGRADE,
     },
 };
 use codebox_agent_codex::{
-    CloudCapture, CloudDiff, CloudDiffReadErrorCategory, CloudLifecycleErrorCategory, CloudPrompt,
-    CloudSubmitOperationId, CredentialScopeError, LoginBrokerError, LoginOperationId, LoginStatus,
-    UnknownSubmitDecision, decode_cloud_diff,
+    CloudBranch, CloudCapture, CloudDiff, CloudDiffReadErrorCategory, CloudEnvironmentId,
+    CloudLifecycleErrorCategory, CloudPrompt, CloudRunnerConfig, CloudSubmitOperationId,
+    CloudTaskOrchestrator, CredentialScope, CredentialScopeConfig, CredentialScopeError,
+    LoginBroker, LoginBrokerError, LoginOperationId, LoginStatus, UnknownSubmitDecision,
+    decode_cloud_diff,
 };
 use codebox_domain::{CommandId, EventSeq, SessionId, TurnId};
 use codebox_session_runtime::{
-    P0Actor, P0CloudLifecycle, P0InstanceId, P0RecoveryCandidates, P0SessionErrorCategory,
-    P0SessionIdentity, P0SessionSnapshot, P0SessionState, P0TurnProjection, P0TurnReceipt,
+    P0Actor, P0CloudLifecycle, P0InstanceId, P0RecoveryCandidates, P0SessionConfig,
+    P0SessionErrorCategory, P0SessionEvent, P0SessionEventEnvelope, P0SessionIdentity,
+    P0SessionRuntime, P0SessionSnapshot, P0SessionState, P0TurnProjection, P0TurnReceipt,
     P0TurnSnapshot,
 };
+use futures_util::{SinkExt, StreamExt};
 use http_body::{Body as HttpBody, Frame};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
+use tokio::sync::mpsc;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message as ClientMessage;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -36,8 +53,15 @@ use crate::error::{
     ApiError, map_cloud_diff_error, map_cloud_lifecycle_error, map_login_error,
     map_session_category,
 };
-use crate::ports::{LoginInstructions, LoginPort, LoginPortError, SessionPort, SessionPortError};
+use crate::ports::{
+    LiveEventError, LiveEventPort, LoginInstructions, LoginPort, LoginPortError, SessionPort,
+    SessionPortError, SessionSubscribeError, SessionSubscription,
+};
+use crate::state::RequestAdmission;
 use crate::state::{EntropySource, MonotonicClock, P0ControlPlane, cookie_comparison_work};
+use crate::websocket::{
+    ClientFrame, ServerFrame, SocketReader, SocketWriter, StreamDeadlines, run_socket,
+};
 
 const ORIGIN_VALUE: &str = "https://operator.example";
 const BOOTSTRAP_SECRET: &str = "bootstrap-secret-32-bytes-value!";
@@ -230,6 +254,11 @@ struct FakeSessionState {
     diff_gate: Option<Arc<Gate>>,
     shutdown_gate: Option<Arc<Gate>>,
     diff: String,
+    subscription_error: Option<SessionSubscribeError>,
+    replay: Vec<P0SessionEventEnvelope>,
+    live: Arc<FakeLiveState>,
+    subscribe_calls: usize,
+    last_cursor: Option<(SessionId, EventSeq)>,
 }
 
 struct FakeSession {
@@ -255,6 +284,11 @@ impl FakeSession {
                 diff_gate: None,
                 shutdown_gate: None,
                 diff: DIFF_CANARY.to_owned(),
+                subscription_error: None,
+                replay: Vec::new(),
+                live: Arc::new(FakeLiveState::default()),
+                subscribe_calls: 0,
+                last_cursor: None,
             }),
         }
     }
@@ -285,6 +319,64 @@ impl FakeSession {
             state.diff_calls,
             state.shutdown_calls,
         )
+    }
+
+    fn configure_subscription(
+        &self,
+        replay: Vec<P0SessionEventEnvelope>,
+        snapshot: P0SessionSnapshot,
+    ) -> Arc<FakeLiveState> {
+        let mut state = self.state.lock().expect("fake session");
+        state.replay = replay;
+        state.snapshot = snapshot;
+        state.subscription_error = None;
+        Arc::clone(&state.live)
+    }
+
+    fn set_subscription_error(&self, error: SessionSubscribeError) {
+        self.state.lock().expect("fake session").subscription_error = Some(error);
+    }
+
+    fn subscription_observation(&self) -> (usize, Option<(SessionId, EventSeq)>, usize) {
+        let state = self.state.lock().expect("fake session");
+        (
+            state.subscribe_calls,
+            state.last_cursor,
+            state.live.drops.load(Ordering::SeqCst),
+        )
+    }
+}
+
+#[derive(Default)]
+struct FakeLiveState {
+    queue: Mutex<VecDeque<Result<P0SessionEventEnvelope, LiveEventError>>>,
+    drops: AtomicUsize,
+}
+
+impl FakeLiveState {
+    fn push(&self, item: Result<P0SessionEventEnvelope, LiveEventError>) {
+        self.queue.lock().expect("fake live queue").push_back(item);
+    }
+}
+
+struct FakeLive {
+    state: Arc<FakeLiveState>,
+}
+
+impl LiveEventPort for FakeLive {
+    fn try_recv(&self) -> Result<P0SessionEventEnvelope, LiveEventError> {
+        self.state
+            .queue
+            .lock()
+            .map_err(|_| LiveEventError::RuntimeStopped)?
+            .pop_front()
+            .unwrap_or(Err(LiveEventError::Empty))
+    }
+}
+
+impl Drop for FakeLive {
+    fn drop(&mut self) {
+        self.state.drops.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -390,6 +482,32 @@ impl SessionPort for FakeSession {
             Some(0),
         ))
         .map_err(|_| SessionPortError::Unavailable)
+    }
+
+    fn subscribe(
+        &self,
+        session_id: SessionId,
+        after_seq: EventSeq,
+    ) -> Result<SessionSubscription, SessionSubscribeError> {
+        let mut state = self.state.lock().map_err(|_| {
+            SessionSubscribeError::new(
+                crate::ports::SessionSubscribeErrorCategory::Unavailable,
+                None,
+                None,
+            )
+        })?;
+        state.subscribe_calls += 1;
+        state.last_cursor = Some((session_id, after_seq));
+        if let Some(error) = state.subscription_error {
+            return Err(error);
+        }
+        Ok(SessionSubscription {
+            replay: state.replay.clone(),
+            snapshot: state.snapshot.clone(),
+            live: Box::new(FakeLive {
+                state: Arc::clone(&state.live),
+            }),
+        })
     }
 
     fn shutdown(&self) -> Result<(), SessionPortError> {
@@ -2089,24 +2207,1194 @@ async fn p0_http_shutdown_drains_handlers_and_cleans_lower_runtime() {
     assert_eq!(stopped.status, StatusCode::SERVICE_UNAVAILABLE);
 }
 
-macro_rules! ws_contract_skeleton {
-    ($name:ident) => {
-        #[test]
-        #[ignore = "T005C contract skeleton"]
-        fn $name() {}
-    };
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RecordedFrame {
+    Text(String),
+    Ping,
+    Close { code: u16, reason: &'static str },
 }
 
-ws_contract_skeleton!(p0_ws_requires_cookie_origin_and_valid_upgrade);
-ws_contract_skeleton!(p0_ws_requires_one_bounded_subscribe_before_deadline);
-ws_contract_skeleton!(p0_ws_replay_snapshot_end_then_live_order_is_exact);
-ws_contract_skeleton!(p0_ws_reconnect_after_each_retained_seq_has_no_loss_or_duplicate);
-ws_contract_skeleton!(p0_ws_rejects_history_gap_without_partial_replay);
-ws_contract_skeleton!(p0_ws_rejects_future_wrong_session_and_unsupported_version);
-ws_contract_skeleton!(p0_ws_rejects_binary_unknown_fields_and_repeated_subscribe);
-ws_contract_skeleton!(p0_ws_live_handoff_closes_replay_publication_race);
-ws_contract_skeleton!(p0_ws_slow_consumer_closes_only_its_connection);
-ws_contract_skeleton!(p0_ws_disconnect_never_cancels_or_mutates_session);
-ws_contract_skeleton!(p0_ws_shutdown_and_send_failure_remove_subscriber);
-ws_contract_skeleton!(p0_ws_frames_and_errors_exclude_sensitive_canaries);
-ws_contract_skeleton!(p0_ws_chunk_partition_and_reconnect_model_preserves_order);
+struct TestSocketReader {
+    input: mpsc::UnboundedReceiver<ClientFrame>,
+}
+
+impl SocketReader for TestSocketReader {
+    fn receive(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<ClientFrame>, ()>> + Send + '_>> {
+        Box::pin(async move { Ok(self.input.recv().await) })
+    }
+}
+
+struct TestSocketWriter {
+    output: Arc<Mutex<Vec<RecordedFrame>>>,
+    send_count: usize,
+    fail_at: Option<usize>,
+    delay: Duration,
+}
+
+impl SocketWriter for TestSocketWriter {
+    fn send(
+        &mut self,
+        frame: ServerFrame,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ()>> + Send + '_>> {
+        Box::pin(async move {
+            let index = self.send_count;
+            self.send_count = self.send_count.saturating_add(1);
+            if self.fail_at == Some(index) {
+                return Err(());
+            }
+            if !self.delay.is_zero() {
+                tokio::time::sleep(self.delay).await;
+            }
+            let recorded = match frame {
+                ServerFrame::Text(text) => RecordedFrame::Text(text),
+                ServerFrame::Ping => RecordedFrame::Ping,
+                ServerFrame::Close { code, reason } => RecordedFrame::Close { code, reason },
+            };
+            self.output.lock().map_err(|_| ())?.push(recorded);
+            Ok(())
+        })
+    }
+}
+
+struct RunningSocket {
+    input: mpsc::UnboundedSender<ClientFrame>,
+    output: Arc<Mutex<Vec<RecordedFrame>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+fn test_deadlines() -> StreamDeadlines {
+    StreamDeadlines::for_test(
+        Duration::from_millis(80),
+        Duration::from_millis(80),
+        Duration::from_millis(20),
+        Duration::from_millis(10),
+        Duration::from_millis(2),
+        Duration::from_millis(100),
+    )
+}
+
+fn websocket_admission(harness: &Harness, auth: &Auth) -> Arc<RequestAdmission> {
+    let mut headers = HeaderMap::new();
+    headers.insert(COOKIE, HeaderValue::from_str(&auth.cookie).expect("cookie"));
+    let app_session = harness
+        .plane
+        .shared
+        .authenticate_cookie(&headers)
+        .expect("application session");
+    let lifecycle = harness
+        .plane
+        .shared
+        .lifecycle
+        .admit()
+        .expect("lifecycle admission");
+    Arc::new(RequestAdmission::new(lifecycle, app_session))
+}
+
+fn launch_socket(
+    harness: &Harness,
+    auth: &Auth,
+    frames: impl IntoIterator<Item = ClientFrame>,
+) -> RunningSocket {
+    launch_socket_with_writer(harness, auth, frames, None, Duration::ZERO)
+}
+
+fn launch_socket_with_writer(
+    harness: &Harness,
+    auth: &Auth,
+    frames: impl IntoIterator<Item = ClientFrame>,
+    fail_at: Option<usize>,
+    delay: Duration,
+) -> RunningSocket {
+    let (input, receiver) = mpsc::unbounded_channel();
+    for frame in frames {
+        input.send(frame).expect("queue client frame");
+    }
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let reader: Box<dyn SocketReader> = Box::new(TestSocketReader { input: receiver });
+    let writer: Box<dyn SocketWriter> = Box::new(TestSocketWriter {
+        output: Arc::clone(&output),
+        send_count: 0,
+        fail_at,
+        delay,
+    });
+    let admission = websocket_admission(harness, auth);
+    let session: Arc<dyn SessionPort> = harness.session.clone();
+    let task = tokio::spawn(run_socket(
+        reader,
+        writer,
+        admission,
+        session,
+        test_deadlines(),
+    ));
+    RunningSocket {
+        input,
+        output,
+        task,
+    }
+}
+
+async fn wait_for_output(output: &Arc<Mutex<Vec<RecordedFrame>>>, count: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if output.lock().expect("socket output").len() >= count {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("socket output deadline");
+}
+
+fn output_snapshot(output: &Arc<Mutex<Vec<RecordedFrame>>>) -> Vec<RecordedFrame> {
+    output.lock().expect("socket output").clone()
+}
+
+fn subscribe_frame(session_id: SessionId, after_seq: EventSeq) -> ClientFrame {
+    ClientFrame::Text(
+        json!({
+            "type": "subscribe",
+            "protocol_version": 1,
+            "session_id": session_id,
+            "after_seq": after_seq
+        })
+        .to_string(),
+    )
+}
+
+fn snapshot_at(identity: P0SessionIdentity, high_water_seq: u64) -> P0SessionSnapshot {
+    P0SessionSnapshot {
+        identity,
+        state: P0SessionState::Ready,
+        current_turn: None,
+        high_water_seq: EventSeq::new(high_water_seq),
+    }
+}
+
+fn event_at(session_id: SessionId, seq: u64) -> P0SessionEventEnvelope {
+    P0SessionEventEnvelope {
+        schema_version: 1,
+        session_id,
+        seq: EventSeq::new(seq),
+        turn_id: None,
+        payload: P0SessionEvent::TurnAccepted,
+    }
+}
+
+fn text_values(output: &[RecordedFrame]) -> Vec<Value> {
+    output
+        .iter()
+        .filter_map(|frame| match frame {
+            RecordedFrame::Text(text) => {
+                Some(serde_json::from_str(text).expect("WebSocket JSON frame"))
+            }
+            RecordedFrame::Ping | RecordedFrame::Close { .. } => None,
+        })
+        .collect()
+}
+
+async fn close_running(socket: RunningSocket) -> Vec<RecordedFrame> {
+    let _ = socket.input.send(ClientFrame::Close);
+    socket.task.await.expect("socket task");
+    output_snapshot(&socket.output)
+}
+
+async fn start_loopback(
+    router: Router,
+) -> (
+    std::net::SocketAddr,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("loopback listener");
+    let address = listener.local_addr().expect("loopback address");
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .expect("loopback server");
+    });
+    (address, stop, task)
+}
+
+async fn connect_loopback(
+    address: std::net::SocketAddr,
+    auth: &Auth,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    let mut request = format!("ws://{address}/api/p0/v1/session/stream")
+        .into_client_request()
+        .expect("WebSocket request");
+    request.headers_mut().insert(
+        COOKIE,
+        HeaderValue::from_str(&auth.cookie).expect("WebSocket cookie"),
+    );
+    request
+        .headers_mut()
+        .insert(ORIGIN, HeaderValue::from_static(ORIGIN_VALUE));
+    let (socket, response) = connect_async(request).await.expect("WebSocket upgrade");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    assert_eq!(
+        response
+            .headers()
+            .get(CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-content-type-options")
+            .and_then(|value| value.to_str().ok()),
+        Some("nosniff")
+    );
+    socket
+}
+
+#[cfg(target_os = "linux")]
+static NEXT_WS_LAYOUT: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(target_os = "linux")]
+struct ConcreteWsLayout {
+    root: PathBuf,
+    executable: PathBuf,
+    codex_home: PathBuf,
+    state_dir: PathBuf,
+    working_dir: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+impl ConcreteWsLayout {
+    fn new() -> Self {
+        let root = loop {
+            let sequence = NEXT_WS_LAYOUT.fetch_add(1, Ordering::Relaxed);
+            let candidate = Path::new("/dev/shm")
+                .join(format!("codebox-t005c-{}-{sequence}", std::process::id()));
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create concrete WebSocket fixture root: {error}"),
+            }
+        };
+        set_private_mode(&root);
+        let executable = root.join("codex-fixture");
+        fs::write(&executable, concrete_ws_fixture()).expect("write concrete Codex fixture");
+        set_private_mode(&executable);
+        let codex_home = concrete_private_directory(&root, "codex-home");
+        let state_dir = concrete_private_directory(&root, "state");
+        let working_dir = concrete_private_directory(&root, "working");
+        Self {
+            root,
+            executable,
+            codex_home,
+            state_dir,
+            working_dir,
+        }
+    }
+
+    fn scope(&self) -> CredentialScope {
+        CredentialScope::validate(CredentialScopeConfig::new(
+            self.executable.clone(),
+            self.codex_home.clone(),
+            self.state_dir.clone(),
+            self.working_dir.clone(),
+        ))
+        .expect("concrete credential scope")
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ConcreteWsLayout {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn concrete_private_directory(root: &Path, name: &str) -> PathBuf {
+    let path = root.join(name);
+    fs::create_dir(&path).expect("create concrete private directory");
+    set_private_mode(&path);
+    path
+}
+
+#[cfg(target_os = "linux")]
+fn set_private_mode(path: &Path) {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .expect("set concrete fixture mode");
+}
+
+#[cfg(target_os = "linux")]
+fn concrete_ws_fixture() -> &'static [u8] {
+    br#"#!/bin/sh
+case " $* " in
+  " --version ")
+    printf 'codex-cli 0.145.0\n'
+    exit 0
+    ;;
+  *" login status "*)
+    printf 'Logged in using ChatGPT\n' >&2
+    exit 0
+    ;;
+esac
+exit 97
+"#
+}
+
+#[cfg(target_os = "linux")]
+async fn assert_concrete_subscription_loopback() {
+    let layout = ConcreteWsLayout::new();
+    let login = LoginBroker::new(layout.scope()).expect("concrete login broker");
+    let orchestrator = CloudTaskOrchestrator::new(CloudRunnerConfig::new(
+        layout.scope(),
+        CloudEnvironmentId::try_new("env_synthetic").expect("environment"),
+        CloudBranch::try_new("main").expect("branch"),
+    ))
+    .expect("concrete cloud orchestrator");
+    let runtime = Arc::new(
+        P0SessionRuntime::new(
+            orchestrator,
+            P0SessionConfig::try_new(Duration::from_millis(250), 64, 8, 8).expect("session bounds"),
+        )
+        .expect("concrete session runtime"),
+    );
+    let identity = runtime.identity();
+    let config = P0HttpConfig::new(
+        P0PublicOrigin::try_new(ORIGIN_VALUE).expect("origin"),
+        OperatorBootstrapToken::try_new(BOOTSTRAP_SECRET).expect("bootstrap"),
+    )
+    .try_with_session_lifetime(Duration::from_secs(300))
+    .expect("session lifetime");
+    let plane = Arc::new(
+        P0ControlPlane::new(config, login, Arc::clone(&runtime)).expect("concrete control plane"),
+    );
+    let router = plane.router();
+    let bootstrap = send(
+        &router,
+        Request::builder()
+            .method(Method::POST)
+            .uri("/api/p0/v1/operator/session")
+            .header(ORIGIN, ORIGIN_VALUE)
+            .header(AUTHORIZATION, format!("Bearer {BOOTSTRAP_SECRET}"))
+            .body(Body::empty())
+            .expect("concrete bootstrap"),
+    )
+    .await;
+    let body = json_body(&bootstrap);
+    let auth = Auth {
+        cookie: bootstrap
+            .headers
+            .get(SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .expect("concrete cookie")
+            .to_owned(),
+        instance: body["instance_id"]
+            .as_str()
+            .expect("concrete instance")
+            .to_owned(),
+    };
+    let (address, stop, server) = start_loopback(router).await;
+    let mut socket = connect_loopback(address, &auth).await;
+    socket
+        .send(ClientMessage::Text(
+            json!({
+                "type":"subscribe",
+                "protocol_version":1,
+                "session_id":identity.session_id,
+                "after_seq":0
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("concrete subscribe");
+    let mut kinds = Vec::new();
+    while kinds.len() < 3 {
+        let message = socket
+            .next()
+            .await
+            .expect("concrete frame")
+            .expect("concrete WebSocket read");
+        if let ClientMessage::Text(text) = message {
+            let value: Value = serde_json::from_str(&text).expect("concrete frame JSON");
+            kinds.push(
+                value["type"]
+                    .as_str()
+                    .expect("concrete frame type")
+                    .to_owned(),
+            );
+        }
+    }
+    assert_eq!(kinds, ["replay_begin", "snapshot", "replay_end"]);
+    socket.close(None).await.expect("concrete client close");
+    let _ = stop.send(());
+    server.await.expect("concrete server join");
+    plane.shutdown().await.expect("concrete shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_requires_cookie_origin_and_valid_upgrade() {
+    let harness = harness(300);
+    let missing_cookie = send(
+        &harness.router,
+        Request::builder()
+            .uri("/api/p0/v1/session/stream")
+            .header(ORIGIN, ORIGIN_VALUE)
+            .header("connection", "upgrade")
+            .header(UPGRADE, "websocket")
+            .header(SEC_WEBSOCKET_VERSION, "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(Body::empty())
+            .expect("upgrade request"),
+    )
+    .await;
+    assert_eq!(missing_cookie.status, StatusCode::UNAUTHORIZED);
+
+    let (auth, _) = authenticate(&harness).await;
+    let wrong_origin = send(
+        &harness.router,
+        Request::builder()
+            .uri("/api/p0/v1/session/stream")
+            .header(COOKIE, &auth.cookie)
+            .header(ORIGIN, "https://evil.example")
+            .header("connection", "upgrade")
+            .header(UPGRADE, "websocket")
+            .header(SEC_WEBSOCKET_VERSION, "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(Body::empty())
+            .expect("wrong Origin upgrade"),
+    )
+    .await;
+    assert_eq!(wrong_origin.status, StatusCode::FORBIDDEN);
+
+    let invalid_upgrade = send(
+        &harness.router,
+        Request::builder()
+            .uri("/api/p0/v1/session/stream")
+            .header(COOKIE, &auth.cookie)
+            .header(ORIGIN, ORIGIN_VALUE)
+            .body(Body::empty())
+            .expect("invalid upgrade"),
+    )
+    .await;
+    assert_eq!(invalid_upgrade.status, StatusCode::UPGRADE_REQUIRED);
+    assert_common_headers(&invalid_upgrade);
+    assert_eq!(
+        invalid_upgrade
+            .headers
+            .get(UPGRADE)
+            .and_then(|value| value.to_str().ok()),
+        Some("websocket")
+    );
+    assert_eq!(
+        invalid_upgrade
+            .headers
+            .get(SEC_WEBSOCKET_VERSION)
+            .and_then(|value| value.to_str().ok()),
+        Some("13")
+    );
+    assert_eq!(
+        json_body(&invalid_upgrade),
+        json!({"error":{"code":"websocket_upgrade_required","message":"a version-13 WebSocket upgrade is required"}})
+    );
+
+    let (address, stop, server) = start_loopback(harness.router.clone()).await;
+    let mut socket = connect_loopback(address, &auth).await;
+    socket
+        .send(ClientMessage::Text(
+            json!({
+                "type": "subscribe",
+                "protocol_version": 1,
+                "session_id": harness.session.identity().session_id,
+                "after_seq": 0
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("subscribe");
+    let first = socket
+        .next()
+        .await
+        .expect("first frame")
+        .expect("first text");
+    assert!(matches!(first, ClientMessage::Text(_)));
+    socket.close(None).await.expect("client close");
+    let _ = stop.send(());
+    server.await.expect("server join");
+
+    #[cfg(target_os = "linux")]
+    assert_concrete_subscription_loopback().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_requires_one_bounded_subscribe_before_deadline() {
+    let harness = harness(300);
+    let (auth, _) = authenticate(&harness).await;
+    let timeout_socket = launch_socket(&harness, &auth, []);
+    wait_for_output(&timeout_socket.output, 2).await;
+    let timeout_output = close_running(timeout_socket).await;
+    let timeout_values = text_values(&timeout_output);
+    assert_eq!(timeout_values.len(), 1);
+    assert_eq!(timeout_values[0]["code"], "subscribe_timeout");
+    assert!(timeout_output.contains(&RecordedFrame::Close {
+        code: 1008,
+        reason: "subscribe_timeout"
+    }));
+
+    let (address, stop, server) = start_loopback(harness.router.clone()).await;
+    let mut socket = connect_loopback(address, &auth).await;
+    socket
+        .send(ClientMessage::Text("x".repeat(1025).into()))
+        .await
+        .expect("oversize text write");
+    let result = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .expect("oversize rejection deadline");
+    match result {
+        None | Some(Err(_)) | Some(Ok(ClientMessage::Close(_))) => {}
+        Some(Ok(message)) => {
+            panic!("unexpected application response to oversize input: {message:?}")
+        }
+    }
+    let _ = stop.send(());
+    server.await.expect("server join");
+    assert_eq!(harness.session.subscription_observation().0, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_replay_snapshot_end_then_live_order_is_exact() {
+    let harness = harness(300);
+    let identity = harness.session.identity();
+    let replay = vec![
+        event_at(identity.session_id, 1),
+        event_at(identity.session_id, 2),
+    ];
+    let live = harness
+        .session
+        .configure_subscription(replay, snapshot_at(identity, 2));
+    live.push(Ok(event_at(identity.session_id, 3)));
+    let (auth, _) = authenticate(&harness).await;
+    let socket = launch_socket(
+        &harness,
+        &auth,
+        [subscribe_frame(identity.session_id, EventSeq::initial())],
+    );
+    wait_for_output(&socket.output, 6).await;
+    let output = close_running(socket).await;
+    let values = text_values(&output);
+    assert_eq!(
+        values
+            .iter()
+            .map(|value| &value["type"])
+            .collect::<Vec<_>>(),
+        vec![
+            "replay_begin",
+            "event",
+            "event",
+            "snapshot",
+            "replay_end",
+            "event"
+        ]
+    );
+    assert_eq!(values[0]["after_seq"], 0);
+    assert_eq!(values[0]["high_water_seq"], 2);
+    assert_eq!(values[1]["envelope"]["seq"], 1);
+    assert_eq!(values[2]["envelope"]["seq"], 2);
+    assert_eq!(values[3]["snapshot"]["high_water_seq"], 2);
+    assert_eq!(values[3]["high_water_seq"], 2);
+    assert_eq!(values[4]["high_water_seq"], 2);
+    assert_eq!(values[5]["envelope"]["seq"], 3);
+    assert_eq!(harness.session.subscription_observation().2, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_reconnect_after_each_retained_seq_has_no_loss_or_duplicate() {
+    let harness = harness(300);
+    let identity = harness.session.identity();
+    let (auth, _) = authenticate(&harness).await;
+    for cursor in 0..=3 {
+        let replay = ((cursor + 1)..=3)
+            .map(|seq| event_at(identity.session_id, seq))
+            .collect();
+        harness
+            .session
+            .configure_subscription(replay, snapshot_at(identity, 3));
+        let socket = launch_socket(
+            &harness,
+            &auth,
+            [subscribe_frame(identity.session_id, EventSeq::new(cursor))],
+        );
+        wait_for_output(
+            &socket.output,
+            usize::try_from(6 - cursor).expect("frame count"),
+        )
+        .await;
+        let output = close_running(socket).await;
+        let sequences: Vec<u64> = text_values(&output)
+            .iter()
+            .filter_map(|value| value["envelope"]["seq"].as_u64())
+            .collect();
+        assert_eq!(sequences, ((cursor + 1)..=3).collect::<Vec<_>>());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_rejects_history_gap_without_partial_replay() {
+    let harness = harness(300);
+    let identity = harness.session.identity();
+    harness
+        .session
+        .set_subscription_error(SessionSubscribeError::new(
+            crate::ports::SessionSubscribeErrorCategory::HistoryGap,
+            Some(EventSeq::new(2)),
+            Some(EventSeq::new(3)),
+        ));
+    let (auth, _) = authenticate(&harness).await;
+    let socket = launch_socket(
+        &harness,
+        &auth,
+        [subscribe_frame(identity.session_id, EventSeq::initial())],
+    );
+    wait_for_output(&socket.output, 2).await;
+    let output = close_running(socket).await;
+    let values = text_values(&output);
+    assert_eq!(
+        values,
+        vec![json!({
+            "type": "error",
+            "code": "history_gap",
+            "message": "requested session history is no longer retained",
+            "oldest_available": 2,
+            "latest_available": 3
+        })]
+    );
+    assert_eq!(
+        output.last(),
+        Some(&RecordedFrame::Close {
+            code: 1008,
+            reason: "history_gap"
+        })
+    );
+    assert_eq!(harness.session.subscription_observation().2, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_rejects_future_wrong_session_and_unsupported_version() {
+    let version_harness = harness(300);
+    let identity = version_harness.session.identity();
+    let (version_auth, _) = authenticate(&version_harness).await;
+    let version = launch_socket(
+        &version_harness,
+        &version_auth,
+        [ClientFrame::Text(
+            json!({
+                "type":"subscribe",
+                "protocol_version":2,
+                "session_id":identity.session_id,
+                "after_seq":0
+            })
+            .to_string(),
+        )],
+    );
+    wait_for_output(&version.output, 2).await;
+    let version_output = close_running(version).await;
+    assert_eq!(
+        text_values(&version_output)[0],
+        json!({
+            "type":"error",
+            "code":"unsupported_version",
+            "message":"WebSocket protocol version is unsupported",
+            "supported_version":1
+        })
+    );
+    assert_eq!(version_harness.session.subscription_observation().0, 0);
+
+    for invalid_id in [
+        Value::String(Uuid::nil().to_string()),
+        Value::String("malformed".to_owned()),
+    ] {
+        let harness = harness(300);
+        let (auth, _) = authenticate(&harness).await;
+        let socket = launch_socket(
+            &harness,
+            &auth,
+            [ClientFrame::Text(
+                json!({
+                    "type":"subscribe",
+                    "protocol_version":1,
+                    "session_id":invalid_id,
+                    "after_seq":0
+                })
+                .to_string(),
+            )],
+        );
+        wait_for_output(&socket.output, 2).await;
+        let output = close_running(socket).await;
+        assert_eq!(text_values(&output)[0]["code"], "protocol_error");
+        assert_eq!(harness.session.subscription_observation().0, 0);
+    }
+
+    let wrong_harness = harness(300);
+    let (wrong_auth, _) = authenticate(&wrong_harness).await;
+    wrong_harness
+        .session
+        .set_subscription_error(SessionSubscribeError::new(
+            crate::ports::SessionSubscribeErrorCategory::WrongSession,
+            None,
+            None,
+        ));
+    let wrong_id = SessionId::try_from_uuid(Uuid::from_u128(99)).expect("wrong session");
+    let wrong = launch_socket(
+        &wrong_harness,
+        &wrong_auth,
+        [subscribe_frame(wrong_id, EventSeq::initial())],
+    );
+    wait_for_output(&wrong.output, 2).await;
+    let wrong_output = close_running(wrong).await;
+    assert_eq!(text_values(&wrong_output)[0]["code"], "wrong_session");
+
+    let future_harness = harness(300);
+    let identity = future_harness.session.identity();
+    let (future_auth, _) = authenticate(&future_harness).await;
+    future_harness
+        .session
+        .set_subscription_error(SessionSubscribeError::new(
+            crate::ports::SessionSubscribeErrorCategory::FutureCursor,
+            None,
+            Some(EventSeq::new(3)),
+        ));
+    let future = launch_socket(
+        &future_harness,
+        &future_auth,
+        [subscribe_frame(identity.session_id, EventSeq::new(4))],
+    );
+    wait_for_output(&future.output, 2).await;
+    let future_output = close_running(future).await;
+    assert_eq!(
+        text_values(&future_output)[0],
+        json!({
+            "type":"error",
+            "code":"future_cursor",
+            "message":"requested session cursor is in the future",
+            "latest_available":3
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_rejects_binary_unknown_fields_and_repeated_subscribe() {
+    for frame in [
+        ClientFrame::Binary,
+        ClientFrame::Text(
+            r#"{"type":"subscribe","protocol_version":1,"session_id":"00000000-0000-0000-0000-000000000001","after_seq":0,"extra":true}"#
+                .to_owned(),
+        ),
+    ] {
+        let harness = harness(300);
+        let (auth, _) = authenticate(&harness).await;
+        let socket = launch_socket(&harness, &auth, [frame]);
+        wait_for_output(&socket.output, 2).await;
+        let output = close_running(socket).await;
+        assert_eq!(text_values(&output)[0]["code"], "protocol_error");
+        assert_eq!(harness.session.subscription_observation().0, 0);
+    }
+
+    let deadline_harness = harness(300);
+    let (deadline_auth, _) = authenticate(&deadline_harness).await;
+    let deadline_socket = launch_socket(&deadline_harness, &deadline_auth, []);
+    let pings = deadline_socket.input.clone();
+    let pinger = tokio::spawn(async move {
+        for sequence in 0..8 {
+            tokio::time::sleep(Duration::from_millis(15)).await;
+            let frame = if sequence % 2 == 0 {
+                ClientFrame::Ping
+            } else {
+                ClientFrame::Pong
+            };
+            if pings.send(frame).is_err() {
+                return;
+            }
+        }
+    });
+    wait_for_output(&deadline_socket.output, 2).await;
+    let deadline_output = close_running(deadline_socket).await;
+    pinger.await.expect("control-frame pinger");
+    assert_eq!(
+        text_values(&deadline_output)[0]["code"],
+        "subscribe_timeout"
+    );
+    assert_eq!(deadline_harness.session.subscription_observation().0, 0);
+
+    let heartbeat_harness = harness(300);
+    let heartbeat_identity = heartbeat_harness.session.identity();
+    heartbeat_harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(heartbeat_identity, 0));
+    let (heartbeat_auth, _) = authenticate(&heartbeat_harness).await;
+    let heartbeat = launch_socket(
+        &heartbeat_harness,
+        &heartbeat_auth,
+        [subscribe_frame(
+            heartbeat_identity.session_id,
+            EventSeq::initial(),
+        )],
+    );
+    wait_for_output(&heartbeat.output, 3).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert!(!output_snapshot(&heartbeat.output).contains(&RecordedFrame::Ping));
+    wait_for_output(&heartbeat.output, 4).await;
+    assert_eq!(
+        output_snapshot(&heartbeat.output)
+            .iter()
+            .filter(|frame| **frame == RecordedFrame::Ping)
+            .count(),
+        1
+    );
+    let _ = close_running(heartbeat).await;
+
+    let harness = harness(300);
+    let identity = harness.session.identity();
+    harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(identity, 0));
+    let (auth, _) = authenticate(&harness).await;
+    let socket = launch_socket(
+        &harness,
+        &auth,
+        [
+            ClientFrame::Ping,
+            ClientFrame::Pong,
+            subscribe_frame(identity.session_id, EventSeq::initial()),
+        ],
+    );
+    wait_for_output(&socket.output, 3).await;
+    socket.input.send(ClientFrame::Ping).expect("client ping");
+    socket.input.send(ClientFrame::Pong).expect("client pong");
+    socket
+        .input
+        .send(subscribe_frame(identity.session_id, EventSeq::initial()))
+        .expect("repeated subscribe");
+    wait_for_output(&socket.output, 5).await;
+    let output = close_running(socket).await;
+    let values = text_values(&output);
+    assert_eq!(values[0]["type"], "replay_begin");
+    assert_eq!(values[2]["type"], "replay_end");
+    assert_eq!(values[3]["code"], "protocol_error");
+    assert_eq!(
+        output.last(),
+        Some(&RecordedFrame::Close {
+            code: 1008,
+            reason: "protocol_error"
+        })
+    );
+    assert_eq!(harness.session.subscription_observation().0, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_live_handoff_closes_replay_publication_race() {
+    let harness = harness(300);
+    let identity = harness.session.identity();
+    let live = harness.session.configure_subscription(
+        vec![event_at(identity.session_id, 1)],
+        snapshot_at(identity, 1),
+    );
+    live.push(Ok(event_at(identity.session_id, 2)));
+    live.push(Ok(event_at(identity.session_id, 3)));
+    let (auth, _) = authenticate(&harness).await;
+    let socket = launch_socket(
+        &harness,
+        &auth,
+        [subscribe_frame(identity.session_id, EventSeq::initial())],
+    );
+    wait_for_output(&socket.output, 7).await;
+    let output = close_running(socket).await;
+    let values = text_values(&output);
+    let kinds: Vec<&str> = values
+        .iter()
+        .map(|value| value["type"].as_str().expect("frame type"))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "replay_begin",
+            "event",
+            "snapshot",
+            "replay_end",
+            "event",
+            "event"
+        ]
+    );
+    let sequences: Vec<u64> = values
+        .iter()
+        .filter_map(|value| value["envelope"]["seq"].as_u64())
+        .collect();
+    assert_eq!(sequences, [1, 2, 3]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_slow_consumer_closes_only_its_connection() {
+    let harness = harness(300);
+    let identity = harness.session.identity();
+    let live = harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(identity, 0));
+    live.push(Err(LiveEventError::Lagged));
+    let (auth, _) = authenticate(&harness).await;
+    let lagged = launch_socket(
+        &harness,
+        &auth,
+        [subscribe_frame(identity.session_id, EventSeq::initial())],
+    );
+    wait_for_output(&lagged.output, 5).await;
+    let lagged_output = close_running(lagged).await;
+    assert_eq!(text_values(&lagged_output)[3]["code"], "subscriber_lagged");
+    assert_eq!(
+        lagged_output.last(),
+        Some(&RecordedFrame::Close {
+            code: 1013,
+            reason: "subscriber_lagged"
+        })
+    );
+
+    harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(identity, 0));
+    let healthy = launch_socket(
+        &harness,
+        &auth,
+        [subscribe_frame(identity.session_id, EventSeq::initial())],
+    );
+    wait_for_output(&healthy.output, 3).await;
+    let healthy_output = close_running(healthy).await;
+    assert_eq!(text_values(&healthy_output).len(), 3);
+    assert_eq!(harness.session.counts(), (0, 0, 0, 0, 0, 0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_disconnect_never_cancels_or_mutates_session() {
+    let expiry_harness = harness(300);
+    let identity = expiry_harness.session.identity();
+    expiry_harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(identity, 0));
+    let (auth, _) = authenticate(&expiry_harness).await;
+    let peer = launch_socket(
+        &expiry_harness,
+        &auth,
+        [subscribe_frame(identity.session_id, EventSeq::initial())],
+    );
+    wait_for_output(&peer.output, 3).await;
+    let peer_output = close_running(peer).await;
+    assert_eq!(text_values(&peer_output).len(), 3);
+
+    let expired = launch_socket(
+        &expiry_harness,
+        &auth,
+        [subscribe_frame(identity.session_id, EventSeq::initial())],
+    );
+    wait_for_output(&expired.output, 3).await;
+    expiry_harness.clock.advance(300);
+    wait_for_output(&expired.output, 5).await;
+    let expired_output = close_running(expired).await;
+    assert_eq!(
+        text_values(&expired_output)[3]["code"],
+        "authentication_expired"
+    );
+
+    let logout_harness = harness(300);
+    let logout_identity = logout_harness.session.identity();
+    logout_harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(logout_identity, 0));
+    let (logout_auth, _) = authenticate(&logout_harness).await;
+    let logout_socket = launch_socket(
+        &logout_harness,
+        &logout_auth,
+        [subscribe_frame(
+            logout_identity.session_id,
+            EventSeq::initial(),
+        )],
+    );
+    wait_for_output(&logout_socket.output, 3).await;
+    let logout = send(
+        &logout_harness.router,
+        protected_request(
+            Method::DELETE,
+            "/api/p0/v1/operator/session",
+            Some(&logout_auth),
+            Some(ORIGIN_VALUE),
+            Some(CommandId::new()),
+            None,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(logout.status, StatusCode::NO_CONTENT);
+    wait_for_output(&logout_socket.output, 5).await;
+    let logout_output = close_running(logout_socket).await;
+    assert_eq!(
+        text_values(&logout_output)[3]["code"],
+        "authentication_expired"
+    );
+    assert_eq!(expiry_harness.session.counts(), (0, 0, 0, 0, 0, 0));
+    assert_eq!(logout_harness.session.counts(), (0, 0, 0, 0, 0, 0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p0_ws_shutdown_and_send_failure_remove_subscriber() {
+    let shutdown_harness = harness(300);
+    let identity = shutdown_harness.session.identity();
+    shutdown_harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(identity, 0));
+    let (auth, _) = authenticate(&shutdown_harness).await;
+    let socket = launch_socket(
+        &shutdown_harness,
+        &auth,
+        [subscribe_frame(identity.session_id, EventSeq::initial())],
+    );
+    wait_for_output(&socket.output, 3).await;
+    let plane = Arc::clone(&shutdown_harness.plane);
+    let shutdown = tokio::spawn(async move { plane.shutdown().await });
+    wait_for_output(&socket.output, 4).await;
+    let output = output_snapshot(&socket.output);
+    assert_eq!(
+        output.last(),
+        Some(&RecordedFrame::Close {
+            code: 1012,
+            reason: "server_shutdown"
+        })
+    );
+    drop(socket.input);
+    socket.task.await.expect("shutdown socket");
+    shutdown
+        .await
+        .expect("shutdown join")
+        .expect("shutdown result");
+    assert_eq!(shutdown_harness.session.subscription_observation().2, 1);
+
+    let failure_harness = harness(300);
+    let failure_identity = failure_harness.session.identity();
+    failure_harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(failure_identity, 0));
+    let (failure_auth, _) = authenticate(&failure_harness).await;
+    let failure = launch_socket_with_writer(
+        &failure_harness,
+        &failure_auth,
+        [subscribe_frame(
+            failure_identity.session_id,
+            EventSeq::initial(),
+        )],
+        Some(0),
+        Duration::ZERO,
+    );
+    failure.task.await.expect("send failure socket");
+    assert_eq!(failure_harness.session.subscription_observation().2, 1);
+    assert!(output_snapshot(&failure.output).is_empty());
+
+    let timeout_harness = harness(300);
+    let timeout_identity = timeout_harness.session.identity();
+    timeout_harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(timeout_identity, 0));
+    let (timeout_auth, _) = authenticate(&timeout_harness).await;
+    let timeout = launch_socket_with_writer(
+        &timeout_harness,
+        &timeout_auth,
+        [subscribe_frame(
+            timeout_identity.session_id,
+            EventSeq::initial(),
+        )],
+        None,
+        Duration::from_millis(200),
+    );
+    tokio::time::timeout(Duration::from_millis(150), timeout.task)
+        .await
+        .expect("bounded write timeout")
+        .expect("write timeout socket");
+    assert_eq!(timeout_harness.session.subscription_observation().2, 1);
+    assert!(output_snapshot(&timeout.output).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_frames_and_errors_exclude_sensitive_canaries() {
+    let harness = harness(300);
+    let (auth, _) = authenticate(&harness).await;
+    let canary = format!(
+        r#"{{"type":"subscribe","protocol_version":1,"session_id":"{PROMPT_CANARY}{DIFF_CANARY}{DEVICE_CODE}{BOOTSTRAP_SECRET}","after_seq":0}}"#
+    );
+    let socket = launch_socket(&harness, &auth, [ClientFrame::Text(canary)]);
+    wait_for_output(&socket.output, 2).await;
+    let output = close_running(socket).await;
+    let rendered = format!("{output:?}");
+    for forbidden in [
+        PROMPT_CANARY,
+        DIFF_CANARY,
+        DEVICE_CODE,
+        BOOTSTRAP_SECRET,
+        &auth.cookie,
+        "/private/operator/path",
+    ] {
+        assert!(!rendered.contains(forbidden));
+    }
+    assert_eq!(text_values(&output)[0]["code"], "protocol_error");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_ws_chunk_partition_and_reconnect_model_preserves_order() {
+    let harness = harness(300);
+    let identity = harness.session.identity();
+    let (auth, _) = authenticate(&harness).await;
+    for retained in 0..=8u64 {
+        for cursor in 0..=retained {
+            let replay = ((cursor + 1)..=retained)
+                .map(|seq| event_at(identity.session_id, seq))
+                .collect();
+            harness
+                .session
+                .configure_subscription(replay, snapshot_at(identity, retained));
+            let socket = launch_socket(
+                &harness,
+                &auth,
+                [subscribe_frame(identity.session_id, EventSeq::new(cursor))],
+            );
+            let expected_frame_count =
+                usize::try_from(retained - cursor + 3).expect("bounded frame count");
+            wait_for_output(&socket.output, expected_frame_count).await;
+            let output = close_running(socket).await;
+            let text: Vec<String> = output
+                .iter()
+                .filter_map(|frame| match frame {
+                    RecordedFrame::Text(text) => Some(text.clone()),
+                    RecordedFrame::Ping | RecordedFrame::Close { .. } => None,
+                })
+                .collect();
+            let flattened = text.concat();
+            for chunk_size in 1..=flattened.len().min(17) {
+                let repartitioned = flattened
+                    .as_bytes()
+                    .chunks(chunk_size)
+                    .flat_map(|chunk| chunk.iter().copied())
+                    .collect::<Vec<_>>();
+                assert_eq!(repartitioned, flattened.as_bytes());
+            }
+            let sequences: Vec<u64> = text
+                .iter()
+                .filter_map(|frame| {
+                    serde_json::from_str::<Value>(frame).expect("frame JSON")["envelope"]["seq"]
+                        .as_u64()
+                })
+                .collect();
+            assert_eq!(sequences, ((cursor + 1)..=retained).collect::<Vec<_>>());
+        }
+    }
+}

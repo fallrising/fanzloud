@@ -441,6 +441,17 @@ impl Shared {
         }
     }
 
+    fn app_session_is_valid(&self, session_seq: u64) -> bool {
+        let now = self.now();
+        let Ok(mut registry) = self.app_sessions.lock() else {
+            return false;
+        };
+        registry.prune_expired(now);
+        registry.sessions.iter().any(|session| {
+            session.issuance_seq == session_seq && !session.invalidated && now < session.expires_at
+        })
+    }
+
     fn shutdown_blocking(&self) -> Result<(), P0HttpShutdownError> {
         match self.lifecycle.begin_shutdown() {
             ShutdownRole::Completed(result) => {
@@ -531,6 +542,10 @@ impl AppSessionLease {
     pub(crate) const fn issuance_seq(&self) -> u64 {
         self.issuance_seq
     }
+
+    fn is_valid(&self) -> bool {
+        self.shared.app_session_is_valid(self.issuance_seq)
+    }
 }
 
 impl Drop for AppSessionLease {
@@ -561,6 +576,14 @@ impl RequestAdmission {
 
     pub(crate) const fn session_seq(&self) -> u64 {
         self.app_session.issuance_seq()
+    }
+
+    pub(crate) fn is_auth_valid(&self) -> bool {
+        self.app_session.is_valid()
+    }
+
+    pub(crate) fn is_control_plane_running(&self) -> bool {
+        self._lifecycle.lifecycle.is_running()
     }
 }
 
