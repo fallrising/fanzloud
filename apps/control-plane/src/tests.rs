@@ -17,7 +17,7 @@ use std::{
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::http::{
-    HeaderMap, HeaderValue, Method, Request, StatusCode,
+    HeaderMap, HeaderValue, Method, Request, StatusCode, Version,
     header::{
         AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, ORIGIN,
         SEC_WEBSOCKET_VERSION, SET_COOKIE, UPGRADE,
@@ -45,6 +45,10 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as ClientMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::frame::Frame as ClientFrameFragment;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::{
+    Data as ClientFrameData, OpCode as ClientOpCode,
+};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -253,6 +257,7 @@ struct FakeSessionState {
     start_gate: Option<Arc<Gate>>,
     diff_gate: Option<Arc<Gate>>,
     shutdown_gate: Option<Arc<Gate>>,
+    subscribe_gate: Option<Arc<Gate>>,
     diff: String,
     subscription_error: Option<SessionSubscribeError>,
     replay: Vec<P0SessionEventEnvelope>,
@@ -283,6 +288,7 @@ impl FakeSession {
                 start_gate: None,
                 diff_gate: None,
                 shutdown_gate: None,
+                subscribe_gate: None,
                 diff: DIFF_CANARY.to_owned(),
                 subscription_error: None,
                 replay: Vec::new(),
@@ -307,6 +313,10 @@ impl FakeSession {
 
     fn set_shutdown_gate(&self, gate: Arc<Gate>) {
         self.state.lock().expect("fake session").shutdown_gate = Some(gate);
+    }
+
+    fn set_subscribe_gate(&self, gate: Arc<Gate>) {
+        self.state.lock().expect("fake session").subscribe_gate = Some(gate);
     }
 
     fn counts(&self) -> (usize, usize, usize, usize, usize, usize) {
@@ -489,15 +499,28 @@ impl SessionPort for FakeSession {
         session_id: SessionId,
         after_seq: EventSeq,
     ) -> Result<SessionSubscription, SessionSubscribeError> {
-        let mut state = self.state.lock().map_err(|_| {
+        let gate = {
+            let mut state = self.state.lock().map_err(|_| {
+                SessionSubscribeError::new(
+                    crate::ports::SessionSubscribeErrorCategory::Unavailable,
+                    None,
+                    None,
+                )
+            })?;
+            state.subscribe_calls += 1;
+            state.last_cursor = Some((session_id, after_seq));
+            state.subscribe_gate.clone()
+        };
+        if let Some(gate) = gate {
+            gate.enter_and_wait();
+        }
+        let state = self.state.lock().map_err(|_| {
             SessionSubscribeError::new(
                 crate::ports::SessionSubscribeErrorCategory::Unavailable,
                 None,
                 None,
             )
         })?;
-        state.subscribe_calls += 1;
-        state.last_cursor = Some((session_id, after_seq));
         if let Some(error) = state.subscription_error {
             return Err(error);
         }
@@ -2228,6 +2251,7 @@ impl SocketReader for TestSocketReader {
 
 struct TestSocketWriter {
     output: Arc<Mutex<Vec<RecordedFrame>>>,
+    started: Arc<AtomicUsize>,
     send_count: usize,
     fail_at: Option<usize>,
     delay: Duration,
@@ -2241,6 +2265,7 @@ impl SocketWriter for TestSocketWriter {
         Box::pin(async move {
             let index = self.send_count;
             self.send_count = self.send_count.saturating_add(1);
+            self.started.fetch_add(1, Ordering::SeqCst);
             if self.fail_at == Some(index) {
                 return Err(());
             }
@@ -2261,6 +2286,7 @@ impl SocketWriter for TestSocketWriter {
 struct RunningSocket {
     input: mpsc::UnboundedSender<ClientFrame>,
     output: Arc<Mutex<Vec<RecordedFrame>>>,
+    started: Arc<AtomicUsize>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -2268,7 +2294,7 @@ fn test_deadlines() -> StreamDeadlines {
     StreamDeadlines::for_test(
         Duration::from_millis(80),
         Duration::from_millis(80),
-        Duration::from_millis(20),
+        Duration::from_millis(60),
         Duration::from_millis(10),
         Duration::from_millis(2),
         Duration::from_millis(100),
@@ -2312,9 +2338,11 @@ fn launch_socket_with_writer(
         input.send(frame).expect("queue client frame");
     }
     let output = Arc::new(Mutex::new(Vec::new()));
+    let started = Arc::new(AtomicUsize::new(0));
     let reader: Box<dyn SocketReader> = Box::new(TestSocketReader { input: receiver });
     let writer: Box<dyn SocketWriter> = Box::new(TestSocketWriter {
         output: Arc::clone(&output),
+        started: Arc::clone(&started),
         send_count: 0,
         fail_at,
         delay,
@@ -2331,8 +2359,29 @@ fn launch_socket_with_writer(
     RunningSocket {
         input,
         output,
+        started,
         task,
     }
+}
+
+async fn wait_for_send_start(started: &AtomicUsize, count: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while started.load(Ordering::SeqCst) < count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("socket send start deadline");
+}
+
+async fn wait_for_live_drops(session: &FakeSession, count: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while session.subscription_observation().2 < count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("live receiver drop deadline");
 }
 
 async fn wait_for_output(output: &Arc<Mutex<Vec<RecordedFrame>>>, count: usize) {
@@ -2705,6 +2754,28 @@ async fn p0_ws_requires_cookie_origin_and_valid_upgrade() {
         json!({"error":{"code":"websocket_upgrade_required","message":"a version-13 WebSocket upgrade is required"}})
     );
 
+    let http_10 = send(
+        &harness.router,
+        Request::builder()
+            .version(Version::HTTP_10)
+            .uri("/api/p0/v1/session/stream")
+            .header(COOKIE, &auth.cookie)
+            .header(ORIGIN, ORIGIN_VALUE)
+            .header("connection", "upgrade")
+            .header(UPGRADE, "websocket")
+            .header(SEC_WEBSOCKET_VERSION, "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(Body::empty())
+            .expect("HTTP/1.0 upgrade"),
+    )
+    .await;
+    assert_eq!(http_10.status, StatusCode::UPGRADE_REQUIRED);
+    assert_common_headers(&http_10);
+    assert_eq!(
+        json_body(&http_10),
+        json!({"error":{"code":"websocket_upgrade_required","message":"a version-13 WebSocket upgrade is required"}})
+    );
+
     let (address, stop, server) = start_loopback(harness.router.clone()).await;
     let mut socket = connect_loopback(address, &auth).await;
     socket
@@ -2752,9 +2823,21 @@ async fn p0_ws_requires_one_bounded_subscribe_before_deadline() {
     let (address, stop, server) = start_loopback(harness.router.clone()).await;
     let mut socket = connect_loopback(address, &auth).await;
     socket
-        .send(ClientMessage::Text("x".repeat(1025).into()))
+        .send(ClientMessage::Frame(ClientFrameFragment::message(
+            vec![b'x'; 600],
+            ClientOpCode::Data(ClientFrameData::Text),
+            false,
+        )))
         .await
-        .expect("oversize text write");
+        .expect("first text fragment");
+    socket
+        .send(ClientMessage::Frame(ClientFrameFragment::message(
+            vec![b'x'; 425],
+            ClientOpCode::Data(ClientFrameData::Continue),
+            true,
+        )))
+        .await
+        .expect("final text fragment");
     let result = tokio::time::timeout(Duration::from_secs(2), socket.next())
         .await
         .expect("oversize rejection deadline");
@@ -3098,8 +3181,7 @@ async fn p0_ws_rejects_binary_unknown_fields_and_repeated_subscribe() {
     assert_eq!(harness.session.subscription_observation().0, 1);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p0_ws_live_handoff_closes_replay_publication_race() {
+async fn assert_live_handoff_closes_replay_publication_race_once() {
     let harness = harness(300);
     let identity = harness.session.identity();
     let live = harness.session.configure_subscription(
@@ -3140,16 +3222,22 @@ async fn p0_ws_live_handoff_closes_replay_publication_race() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p0_ws_slow_consumer_closes_only_its_connection() {
-    let harness = harness(300);
-    let identity = harness.session.identity();
-    let live = harness
+async fn p0_ws_live_handoff_closes_replay_publication_race() {
+    for _ in 0..10 {
+        assert_live_handoff_closes_replay_publication_race_once().await;
+    }
+}
+
+async fn assert_slow_consumer_closes_only_its_connection_once() {
+    let base_harness = harness(300);
+    let identity = base_harness.session.identity();
+    let live = base_harness
         .session
         .configure_subscription(Vec::new(), snapshot_at(identity, 0));
     live.push(Err(LiveEventError::Lagged));
-    let (auth, _) = authenticate(&harness).await;
+    let (auth, _) = authenticate(&base_harness).await;
     let lagged = launch_socket(
-        &harness,
+        &base_harness,
         &auth,
         [subscribe_frame(identity.session_id, EventSeq::initial())],
     );
@@ -3164,22 +3252,65 @@ async fn p0_ws_slow_consumer_closes_only_its_connection() {
         })
     );
 
-    harness
+    base_harness
         .session
         .configure_subscription(Vec::new(), snapshot_at(identity, 0));
     let healthy = launch_socket(
-        &harness,
+        &base_harness,
         &auth,
         [subscribe_frame(identity.session_id, EventSeq::initial())],
     );
     wait_for_output(&healthy.output, 3).await;
     let healthy_output = close_running(healthy).await;
     assert_eq!(text_values(&healthy_output).len(), 3);
-    assert_eq!(harness.session.counts(), (0, 0, 0, 0, 0, 0));
+    assert_eq!(base_harness.session.counts(), (0, 0, 0, 0, 0, 0));
+
+    for (category, code) in [
+        (
+            crate::ports::SessionSubscribeErrorCategory::SubscriberLimit,
+            "subscriber_limit",
+        ),
+        (
+            crate::ports::SessionSubscribeErrorCategory::Unavailable,
+            "stream_unavailable",
+        ),
+    ] {
+        let rejected_harness = harness(300);
+        let rejected_identity = rejected_harness.session.identity();
+        rejected_harness
+            .session
+            .set_subscription_error(SessionSubscribeError::new(category, None, None));
+        let (rejected_auth, _) = authenticate(&rejected_harness).await;
+        let rejected = launch_socket(
+            &rejected_harness,
+            &rejected_auth,
+            [subscribe_frame(
+                rejected_identity.session_id,
+                EventSeq::initial(),
+            )],
+        );
+        wait_for_output(&rejected.output, 2).await;
+        let rejected_output = close_running(rejected).await;
+        assert_eq!(text_values(&rejected_output)[0]["code"], code);
+        assert_eq!(
+            rejected_output.last(),
+            Some(&RecordedFrame::Close {
+                code: 1013,
+                reason: code
+            })
+        );
+        assert_eq!(rejected_harness.session.subscription_observation().2, 0);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p0_ws_disconnect_never_cancels_or_mutates_session() {
+async fn p0_ws_slow_consumer_closes_only_its_connection() {
+    for _ in 0..10 {
+        assert_slow_consumer_closes_only_its_connection_once().await;
+    }
+}
+
+async fn assert_disconnect_never_cancels_or_mutates_session_once() {
     let expiry_harness = harness(300);
     let identity = expiry_harness.session.identity();
     expiry_harness
@@ -3208,6 +3339,38 @@ async fn p0_ws_disconnect_never_cancels_or_mutates_session() {
         text_values(&expired_output)[3]["code"],
         "authentication_expired"
     );
+
+    let admission_harness = harness(300);
+    let admission_identity = admission_harness.session.identity();
+    admission_harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(admission_identity, 0));
+    let admission_gate = Arc::new(Gate::default());
+    admission_harness
+        .session
+        .set_subscribe_gate(Arc::clone(&admission_gate));
+    let (admission_auth, _) = authenticate(&admission_harness).await;
+    let admission_socket = launch_socket(
+        &admission_harness,
+        &admission_auth,
+        [subscribe_frame(
+            admission_identity.session_id,
+            EventSeq::initial(),
+        )],
+    );
+    let wait_gate = Arc::clone(&admission_gate);
+    tokio::task::spawn_blocking(move || wait_gate.wait_entered())
+        .await
+        .expect("subscribe admission entered");
+    admission_harness.clock.advance(300);
+    wait_for_output(&admission_socket.output, 2).await;
+    let admission_output = close_running(admission_socket).await;
+    assert_eq!(
+        text_values(&admission_output)[0]["code"],
+        "authentication_expired"
+    );
+    admission_gate.release();
+    wait_for_live_drops(&admission_harness.session, 1).await;
 
     let logout_harness = harness(300);
     let logout_identity = logout_harness.session.identity();
@@ -3249,23 +3412,32 @@ async fn p0_ws_disconnect_never_cancels_or_mutates_session() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn p0_ws_shutdown_and_send_failure_remove_subscriber() {
+async fn p0_ws_disconnect_never_cancels_or_mutates_session() {
+    for _ in 0..10 {
+        assert_disconnect_never_cancels_or_mutates_session_once().await;
+    }
+}
+
+async fn assert_shutdown_and_send_failure_remove_subscriber_once() {
     let shutdown_harness = harness(300);
     let identity = shutdown_harness.session.identity();
     shutdown_harness
         .session
         .configure_subscription(Vec::new(), snapshot_at(identity, 0));
     let (auth, _) = authenticate(&shutdown_harness).await;
-    let socket = launch_socket(
+    let socket = launch_socket_with_writer(
         &shutdown_harness,
         &auth,
         [subscribe_frame(identity.session_id, EventSeq::initial())],
+        None,
+        Duration::from_millis(40),
     );
-    wait_for_output(&socket.output, 3).await;
+    wait_for_send_start(&socket.started, 1).await;
     let plane = Arc::clone(&shutdown_harness.plane);
     let shutdown = tokio::spawn(async move { plane.shutdown().await });
-    wait_for_output(&socket.output, 4).await;
+    wait_for_output(&socket.output, 2).await;
     let output = output_snapshot(&socket.output);
+    assert!(matches!(output.first(), Some(RecordedFrame::Text(_))));
     assert_eq!(
         output.last(),
         Some(&RecordedFrame::Close {
@@ -3273,13 +3445,62 @@ async fn p0_ws_shutdown_and_send_failure_remove_subscriber() {
             reason: "server_shutdown"
         })
     );
+    assert!(!socket.task.is_finished(), "close grace was not observed");
     drop(socket.input);
-    socket.task.await.expect("shutdown socket");
+    tokio::time::timeout(Duration::from_millis(150), socket.task)
+        .await
+        .expect("close grace bound")
+        .expect("shutdown socket");
     shutdown
         .await
         .expect("shutdown join")
         .expect("shutdown result");
     assert_eq!(shutdown_harness.session.subscription_observation().2, 1);
+
+    let admission_harness = harness(300);
+    let admission_identity = admission_harness.session.identity();
+    admission_harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(admission_identity, 0));
+    let admission_gate = Arc::new(Gate::default());
+    admission_harness
+        .session
+        .set_subscribe_gate(Arc::clone(&admission_gate));
+    let (admission_auth, _) = authenticate(&admission_harness).await;
+    let admission_socket = launch_socket(
+        &admission_harness,
+        &admission_auth,
+        [subscribe_frame(
+            admission_identity.session_id,
+            EventSeq::initial(),
+        )],
+    );
+    let wait_gate = Arc::clone(&admission_gate);
+    tokio::task::spawn_blocking(move || wait_gate.wait_entered())
+        .await
+        .expect("shutdown subscribe admission entered");
+    let admission_plane = Arc::clone(&admission_harness.plane);
+    let admission_shutdown = tokio::spawn(async move { admission_plane.shutdown().await });
+    wait_for_output(&admission_socket.output, 1).await;
+    assert_eq!(
+        output_snapshot(&admission_socket.output).last(),
+        Some(&RecordedFrame::Close {
+            code: 1012,
+            reason: "server_shutdown"
+        })
+    );
+    drop(admission_socket.input);
+    admission_socket
+        .task
+        .await
+        .expect("admission shutdown socket");
+    tokio::time::timeout(Duration::from_millis(150), admission_shutdown)
+        .await
+        .expect("shutdown did not wait for blocked subscribe")
+        .expect("admission shutdown join")
+        .expect("admission shutdown result");
+    admission_gate.release();
+    wait_for_live_drops(&admission_harness.session, 1).await;
 
     let failure_harness = harness(300);
     let failure_identity = failure_harness.session.identity();
@@ -3325,6 +3546,13 @@ async fn p0_ws_shutdown_and_send_failure_remove_subscriber() {
     assert!(output_snapshot(&timeout.output).is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p0_ws_shutdown_and_send_failure_remove_subscriber() {
+    for _ in 0..10 {
+        assert_shutdown_and_send_failure_remove_subscriber_once().await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p0_ws_frames_and_errors_exclude_sensitive_canaries() {
     let harness = harness(300);
@@ -3353,48 +3581,93 @@ async fn p0_ws_frames_and_errors_exclude_sensitive_canaries() {
 async fn p0_ws_chunk_partition_and_reconnect_model_preserves_order() {
     let harness = harness(300);
     let identity = harness.session.identity();
+    harness
+        .session
+        .configure_subscription(Vec::new(), snapshot_at(identity, 0));
     let (auth, _) = authenticate(&harness).await;
-    for retained in 0..=8u64 {
-        for cursor in 0..=retained {
-            let replay = ((cursor + 1)..=retained)
+    let (address, stop, server) = start_loopback(harness.router.clone()).await;
+    let subscribe = json!({
+        "type":"subscribe",
+        "protocol_version":1,
+        "session_id":identity.session_id,
+        "after_seq":0
+    })
+    .to_string();
+    for split in [1, subscribe.len() / 2, subscribe.len() - 1] {
+        let mut socket = connect_loopback(address, &auth).await;
+        socket
+            .send(ClientMessage::Frame(ClientFrameFragment::message(
+                subscribe.as_bytes()[..split].to_vec(),
+                ClientOpCode::Data(ClientFrameData::Text),
+                false,
+            )))
+            .await
+            .expect("first valid subscribe fragment");
+        socket
+            .send(ClientMessage::Frame(ClientFrameFragment::message(
+                subscribe.as_bytes()[split..].to_vec(),
+                ClientOpCode::Data(ClientFrameData::Continue),
+                true,
+            )))
+            .await
+            .expect("final valid subscribe fragment");
+        let mut kinds = Vec::new();
+        while kinds.len() < 3 {
+            let message = socket
+                .next()
+                .await
+                .expect("fragmented subscribe frame")
+                .expect("fragmented subscribe read");
+            if let ClientMessage::Text(text) = message {
+                let value: Value = serde_json::from_str(&text).expect("fragmented frame JSON");
+                kinds.push(
+                    value["type"]
+                        .as_str()
+                        .expect("fragmented frame type")
+                        .to_owned(),
+                );
+            }
+        }
+        assert_eq!(kinds, ["replay_begin", "snapshot", "replay_end"]);
+        socket.close(None).await.expect("fragmented client close");
+    }
+    let _ = stop.send(());
+    server.await.expect("fragmentation server join");
+
+    for partitions in [
+        vec![8],
+        vec![1, 1, 1, 1, 1, 1, 1, 1],
+        vec![3, 1, 4],
+        vec![2, 5, 1],
+    ] {
+        let mut cursor = 0u64;
+        let mut observed = Vec::new();
+        for width in partitions {
+            let high_water = (cursor + width).min(8);
+            let replay = ((cursor + 1)..=high_water)
                 .map(|seq| event_at(identity.session_id, seq))
                 .collect();
             harness
                 .session
-                .configure_subscription(replay, snapshot_at(identity, retained));
+                .configure_subscription(replay, snapshot_at(identity, high_water));
             let socket = launch_socket(
                 &harness,
                 &auth,
                 [subscribe_frame(identity.session_id, EventSeq::new(cursor))],
             );
             let expected_frame_count =
-                usize::try_from(retained - cursor + 3).expect("bounded frame count");
+                usize::try_from(high_water - cursor + 3).expect("bounded frame count");
             wait_for_output(&socket.output, expected_frame_count).await;
             let output = close_running(socket).await;
-            let text: Vec<String> = output
+            let sequences: Vec<u64> = text_values(&output)
                 .iter()
-                .filter_map(|frame| match frame {
-                    RecordedFrame::Text(text) => Some(text.clone()),
-                    RecordedFrame::Ping | RecordedFrame::Close { .. } => None,
-                })
+                .filter_map(|frame| frame["envelope"]["seq"].as_u64())
                 .collect();
-            let flattened = text.concat();
-            for chunk_size in 1..=flattened.len().min(17) {
-                let repartitioned = flattened
-                    .as_bytes()
-                    .chunks(chunk_size)
-                    .flat_map(|chunk| chunk.iter().copied())
-                    .collect::<Vec<_>>();
-                assert_eq!(repartitioned, flattened.as_bytes());
-            }
-            let sequences: Vec<u64> = text
-                .iter()
-                .filter_map(|frame| {
-                    serde_json::from_str::<Value>(frame).expect("frame JSON")["envelope"]["seq"]
-                        .as_u64()
-                })
-                .collect();
-            assert_eq!(sequences, ((cursor + 1)..=retained).collect::<Vec<_>>());
+            assert_eq!(sequences, ((cursor + 1)..=high_water).collect::<Vec<_>>());
+            observed.extend(sequences);
+            cursor = high_water;
         }
+        assert_eq!(cursor, 8);
+        assert_eq!(observed, (1..=8).collect::<Vec<_>>());
     }
 }

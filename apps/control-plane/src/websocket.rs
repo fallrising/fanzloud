@@ -8,7 +8,7 @@ use axum::body::Body;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequestParts, Request, State};
 use axum::http::header::{SEC_WEBSOCKET_VERSION, UPGRADE};
-use axum::http::{HeaderValue, Response, StatusCode};
+use axum::http::{HeaderValue, Response, StatusCode, Version};
 use bytes::Bytes;
 use codebox_domain::{EventSeq, SessionId};
 use codebox_session_runtime::{P0SessionEventEnvelope, P0SessionSnapshot};
@@ -89,6 +89,9 @@ pub(crate) async fn upgrade(State(shared): State<Arc<Shared>>, request: Request)
         if let Err(error) = shared.validate_origin(request.headers()) {
             return Err(CachedResponse::error(error).into_response());
         }
+        if request.version() != Version::HTTP_11 {
+            return Err(upgrade_required());
+        }
         let admission = Arc::new(RequestAdmission::new(lifecycle, app_session));
         let (mut parts, _body) = request.into_parts();
         let websocket = match WebSocketUpgrade::from_request_parts(&mut parts, &shared).await {
@@ -99,7 +102,7 @@ pub(crate) async fn upgrade(State(shared): State<Arc<Shared>>, request: Request)
         let mut response = websocket
             .read_buffer_size(MAX_CLIENT_MESSAGE_BYTES)
             .write_buffer_size(0)
-            .max_write_buffer_size(MAX_SERVER_MESSAGE_BYTES)
+            .max_write_buffer_size(MAX_SERVER_MESSAGE_BYTES + 1024)
             .max_message_size(MAX_CLIENT_MESSAGE_BYTES)
             .max_frame_size(MAX_CLIENT_MESSAGE_BYTES)
             .accept_unmasked_frames(false)
@@ -373,7 +376,8 @@ pub(crate) async fn run_socket(
             return;
         }
         InitialOutcome::Failed(error) => {
-            fail_before_subscription(&mut *reader, &mut *writer, error, deadlines).await;
+            fail_before_subscription(&mut *reader, &mut *writer, &admission, error, deadlines)
+                .await;
             return;
         }
     };
@@ -383,33 +387,24 @@ pub(crate) async fn run_socket(
     let session_id = subscribe.session_id;
     let after_seq = subscribe.after_seq;
     let subscriber = Arc::clone(&session);
+    let subscription_task =
+        tokio::task::spawn_blocking(move || subscriber.subscribe(session_id, after_seq));
     let subscription =
-        tokio::task::spawn_blocking(move || subscriber.subscribe(session_id, after_seq)).await;
-    let subscription = match subscription {
-        Ok(Ok(subscription)) => subscription,
-        Ok(Err(error)) => {
-            fail_after_subscription(
-                &mut *writer,
-                &control,
-                reader_task,
-                ApplicationError::from_subscribe(error),
-                deadlines,
-            )
-            .await;
-            return;
-        }
-        Err(_) => {
-            fail_after_subscription(
-                &mut *writer,
-                &control,
-                reader_task,
-                ApplicationError::stream_unavailable(),
-                deadlines,
-            )
-            .await;
-            return;
-        }
-    };
+        match await_subscription(subscription_task, &admission, &control, deadlines).await {
+            Ok(subscription) => subscription,
+            Err(outcome) => {
+                finish_stream_outcome(
+                    &mut *writer,
+                    &admission,
+                    &control,
+                    reader_task,
+                    outcome,
+                    deadlines,
+                )
+                .await;
+                return;
+            }
+        };
 
     let outcome = stream_subscription(
         &mut *writer,
@@ -421,18 +416,70 @@ pub(crate) async fn run_socket(
         deadlines,
     )
     .await;
+    finish_stream_outcome(
+        &mut *writer,
+        &admission,
+        &control,
+        reader_task,
+        outcome,
+        deadlines,
+    )
+    .await;
+}
+
+async fn await_subscription(
+    mut task: JoinHandle<Result<SessionSubscription, SessionSubscribeError>>,
+    admission: &RequestAdmission,
+    control: &Control,
+    deadlines: StreamDeadlines,
+) -> Result<SessionSubscription, StreamOutcome> {
+    loop {
+        if let Some(outcome) = connection_outcome(admission, control) {
+            task.abort();
+            return Err(outcome);
+        }
+        tokio::select! {
+            result = &mut task => {
+                if let Some(outcome) = connection_outcome(admission, control) {
+                    return Err(outcome);
+                }
+                return match result {
+                    Ok(Ok(subscription)) => Ok(subscription),
+                    Ok(Err(error)) => {
+                        Err(StreamOutcome::Failed(ApplicationError::from_subscribe(error)))
+                    }
+                    Err(_) => {
+                        Err(StreamOutcome::Failed(ApplicationError::stream_unavailable()))
+                    }
+                };
+            }
+            _ = tokio::time::sleep(deadlines.validity_poll) => {}
+            _ = control.changed.notified() => {}
+        }
+    }
+}
+
+async fn finish_stream_outcome(
+    writer: &mut dyn SocketWriter,
+    admission: &RequestAdmission,
+    control: &Control,
+    reader_task: JoinHandle<()>,
+    outcome: StreamOutcome,
+    deadlines: StreamDeadlines,
+) {
     match outcome {
         StreamOutcome::PeerClosed | StreamOutcome::TransportClosed => {
             finish_reader(reader_task, deadlines.close_grace).await;
         }
         StreamOutcome::ServerShutdown => {
-            send_close(&mut *writer, 1012, "server_shutdown", deadlines).await;
+            send_close(writer, 1012, "server_shutdown", deadlines).await;
             finish_reader(reader_task, deadlines.close_grace).await;
         }
         StreamOutcome::Failed(error) => {
-            fail_after_subscription(&mut *writer, &control, reader_task, error, deadlines).await;
+            fail_after_subscription(writer, admission, control, reader_task, error, deadlines)
+                .await;
         }
-    }
+    };
 }
 
 async fn receive_subscribe(
@@ -796,9 +843,18 @@ async fn send_close(
 async fn fail_before_subscription(
     reader: &mut dyn SocketReader,
     writer: &mut dyn SocketWriter,
-    error: ApplicationError,
+    admission: &RequestAdmission,
+    mut error: ApplicationError,
     deadlines: StreamDeadlines,
 ) {
+    if !admission.is_auth_valid() {
+        error = ApplicationError::authentication_expired();
+    } else if !admission.is_control_plane_running() {
+        if send_close(writer, 1012, "server_shutdown", deadlines).await {
+            let _ = tokio::time::timeout(deadlines.close_grace, reader.receive()).await;
+        }
+        return;
+    }
     let Ok(text) = error.serialize() else {
         return;
     };
@@ -813,6 +869,7 @@ async fn fail_before_subscription(
 
 async fn fail_after_subscription(
     writer: &mut dyn SocketWriter,
+    admission: &RequestAdmission,
     control: &Control,
     reader_task: JoinHandle<()>,
     mut error: ApplicationError,
@@ -823,8 +880,19 @@ async fn fail_after_subscription(
             finish_reader(reader_task, Duration::ZERO).await;
             return;
         }
-        ControlState::ProtocolError => error = ApplicationError::protocol_error(),
-        ControlState::Open => {}
+        ControlState::ProtocolError | ControlState::Open => {}
+    }
+    if !admission.is_auth_valid() {
+        error = ApplicationError::authentication_expired();
+    } else if !admission.is_control_plane_running() {
+        if send_close(writer, 1012, "server_shutdown", deadlines).await {
+            finish_reader(reader_task, deadlines.close_grace).await;
+        } else {
+            finish_reader(reader_task, Duration::ZERO).await;
+        }
+        return;
+    } else if control.state() == ControlState::ProtocolError {
+        error = ApplicationError::protocol_error();
     }
     let Ok(text) = error.serialize() else {
         finish_reader(reader_task, Duration::ZERO).await;
