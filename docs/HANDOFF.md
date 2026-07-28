@@ -13,9 +13,9 @@ code beside `CODEX_HOME`.
 
 Branch: `main`
 
-T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, T004C, and the T004 coordination
-parent are Accepted. T004C is the latest completed production task; `ACCEPT-T004C` records its
-implementation evidence and `ACCEPT-T004` records the accepted composition.
+T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, T004C, the T004 coordination
+parent, and T005A are Accepted. T005A is the latest completed production task; `ACCEPT-T005A`
+records its implementation evidence. T005B is the sole Ready production task.
 
 ## Accepted Baseline
 
@@ -142,6 +142,24 @@ credential storage.
 The combined local workspace, P14, and P15 gates pass. A separate fresh Cursor Agent composition
 review returned `COMPOSITION ACCEPTED`, and the parent is Accepted.
 
+### T005A — process-lifetime P0 session lifecycle
+
+- Added one single-writer session runtime with one worker, one active turn, bounded ordered event
+  history, atomic replay/snapshot/live subscription handoff, and nonblocking subscriber isolation.
+- Turn intent commits before the accepted T004 start call; pending lifecycle monitoring is
+  rate-limited, checked provider-read failures retain the exact pending projection with bounded
+  backoff, and unknown outcomes require explicit operation-bound recovery.
+- Explicit cancel and shutdown suppress queued or claimed-but-not-admitted starts. A stale monitor
+  result cannot overwrite an already-terminal cancellation, and shutdown joins without claiming
+  provider cancellation.
+- Diff reads use only the accepted T004C authority and preserve session/event state. Public
+  projections and typed errors are serializable and redacted without exposing prompts, diffs,
+  provider output, configuration values, or paths.
+- All 16 required contract names are substantive; the crate reports 22 unit/property tests plus one
+  concrete accepted-orchestrator integration, and the package suite passed ten consecutive runs.
+- The final fresh Cursor Agent review returned `IMPLEMENTATION ACCEPTED` after independently
+  rechecking all prior concurrency, composition, and configuration-field blockers.
+
 ## Verified Pinned Cloud Surface
 
 The official `rust-v0.145.0` source and local pinned CLI help establish:
@@ -173,30 +191,30 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Generate and compile all 16 named SPEC-T005A skeletons before production code, then implement
-   and accept the sole Ready T005A session lifecycle.
-2. Independently accept T005B private HTTP API, T005C
+1. Generate and compile all named SPEC-T005B skeletons before production code, then implement and
+   accept the sole Ready private HTTP API.
+2. Independently accept T005C
    replay/live stream, and the T005 composition parent in that order.
 3. Continue with T006 minimal private operator web flow and T007 deterministic/live subscription
    end-to-end acceptance after their dependencies are Accepted.
 
 ADR-0004 and the complete T005 decomposition received fresh Cursor Agent design acceptance after
 three rejected drafts repaired durability/authentication, state-transition, cancel/shutdown,
-startup-observation, and subscription-handoff gaps. T005A is the sole Ready production task;
-T005B, T005C, and T005 remain Proposed.
+startup-observation, and subscription-handoff gaps. T005A is Accepted and T005B is the sole Ready
+production task; T005C and T005 remain Proposed.
 
 Do not re-run T001/T010/T002 acceptance work unless their relevant files or behavior change.
 
 ## Validation Evidence
 
-The accepted T004C tree passed:
+The accepted T005A tree passed:
 
 ```text
 cargo fmt --all -- --check
-cargo test -p codebox-agent-codex --all-features
-  97 unit/property tests + 12 integration tests passed
-  real cancellation/reap and stdout/stderr drain tests each repeated 10 consecutive runs
-cargo clippy -p codebox-agent-codex --all-targets --all-features -- -D warnings
+cargo test -p codebox-session-runtime --all-features
+  22 unit/property tests + 1 concrete accepted-orchestrator integration passed
+  complete package suite repeated 10 consecutive runs
+cargo clippy -p codebox-session-runtime --all-targets --all-features -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
 cargo build --workspace --bins --all-features

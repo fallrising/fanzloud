@@ -1,7 +1,7 @@
 ---
 id: SPEC-T005B
 title: Authenticated P0 login and session HTTP API
-status: draft
+status: ready
 contract_unit: CU-API-P0-01
 module: codebox-control-plane
 milestone: P0

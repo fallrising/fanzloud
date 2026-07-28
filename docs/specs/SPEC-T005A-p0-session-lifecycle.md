@@ -1,7 +1,7 @@
 ---
 id: SPEC-T005A
 title: P0 in-process session lifecycle and event fanout
-status: ready
+status: accepted
 contract_unit: CU-SES-P0-01
 module: codebox-session-runtime
 milestone: P0
