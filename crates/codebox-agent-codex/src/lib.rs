@@ -27,6 +27,8 @@ mod runtime;
 mod scope;
 
 #[cfg(test)]
+mod cloud_diff_tests;
+#[cfg(test)]
 mod cloud_lifecycle_tests;
 #[cfg(test)]
 mod cloud_recovery_bridge_tests;
