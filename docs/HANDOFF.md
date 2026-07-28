@@ -15,7 +15,8 @@ Branch: `main`
 
 T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, T004C, the T004 coordination
 parent, and T005A are Accepted. T005A is the latest completed production task; `ACCEPT-T005A`
-records its implementation evidence. T005B is the sole Ready production task.
+records its implementation evidence. The repaired T005B contract received fresh design acceptance
+and T005B is the sole Ready production task.
 
 ## Accepted Baseline
 
@@ -191,8 +192,8 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Generate and compile all named SPEC-T005B skeletons before production code, then implement and
-   accept the sole Ready private HTTP API.
+1. Generate and compile all 19 named SPEC-T005B skeletons before production code, then implement
+   and accept the sole Ready private HTTP API.
 2. Independently accept T005C
    replay/live stream, and the T005 composition parent in that order.
 3. Continue with T006 minimal private operator web flow and T007 deterministic/live subscription
@@ -200,8 +201,10 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ADR-0004 and the complete T005 decomposition received fresh Cursor Agent design acceptance after
 three rejected drafts repaired durability/authentication, state-transition, cancel/shutdown,
-startup-observation, and subscription-handoff gaps. T005A is Accepted and T005B is the sole Ready
-production task; T005C and T005 remain Proposed.
+startup-observation, and subscription-handoff gaps. T005A is Accepted. A later T005B-specific
+review found public-origin, expiry, shutdown, fake-port, route-schema, and error-map blockers.
+Three review passes repaired those plus two residual contradictions, and the final verdict was
+`DESIGN ACCEPTED`. T005B is the sole Ready production task; T005C and T005 remain Proposed.
 
 Do not re-run T001/T010/T002 acceptance work unless their relevant files or behavior change.
 

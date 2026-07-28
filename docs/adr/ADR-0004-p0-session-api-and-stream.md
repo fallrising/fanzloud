@@ -140,6 +140,12 @@ defense in depth; P0 is not a public or multi-user authentication design.
 The authenticated actor is the fixed `P0Actor::Operator`; there is no browser-selected actor or
 tenant.
 
+SPEC-T005B owns the exact mechanics: the normalized administrator origin is compared as one
+canonical HTTPS origin, bootstrap and cookie checks process their full bounded representations,
+cookie values use 32 bytes from the OS CSPRNG, and monotonic time owns expiry. Crate-private
+clock/entropy and lower-port seams make these policies deterministic under contract tests without
+adding a browser-selectable production surface.
+
 ## P0 HTTP surface and process-lifetime idempotency
 
 T005B defines only this P0 surface:
@@ -179,6 +185,11 @@ ledger remains the protection against duplicate submission within an ambiguous l
 Request bodies, headers, and responses have explicit limits in SPEC-T005B. The device verification
 code is returned only in the authenticated start-login response, is never placed in an event or
 idempotency diagnostic, and is discarded when its bounded cache entry expires.
+
+Control-plane shutdown first rejects new admissions, drains already-admitted detached handlers,
+then stops T005A and invokes the accepted T002B cancel/reconcile cleanup off the async reactor. It
+does not infer provider cancellation or discard an in-flight idempotency result before the lower
+call finishes.
 
 ## WebSocket replay/live protocol
 
@@ -253,3 +264,7 @@ rejected incomplete session transition and startup-observation details. The repa
 set closed those gaps with an exact state table, queue/cancel/shutdown protocol, fail-closed startup
 read behavior, and atomic subscription handoff. A fourth fresh read-only review returned
 `DESIGN ACCEPTED` with no blocker.
+
+After T005A acceptance, three T005B-specific fresh reviews further closed the public-origin,
+session-expiry/entropy, shutdown, deterministic-port, exact-route-schema, and exhaustive-error-map
+details. The final T005B design review returned `DESIGN ACCEPTED`.
