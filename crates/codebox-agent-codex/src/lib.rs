@@ -6,9 +6,14 @@
 //! T003 owns side-effect-free, version-pinned Cloud values, fixed argv, and completed-capture
 //! decoders. It exposes no process, credential, repository-execution, retry, or diff-application
 //! authority.
+//! T004B owns the durable provider-task lifecycle, explicit unknown resolution, and local-only
+//! cancellation projection without adding polling, browser leases, or provider cancellation.
 
 mod broker;
 mod cloud;
+mod cloud_lifecycle;
+mod cloud_lifecycle_ledger;
+mod cloud_lifecycle_types;
 mod cloud_runner;
 mod cloud_runner_types;
 mod cloud_submit_ledger;
@@ -21,6 +26,8 @@ mod parser;
 mod runtime;
 mod scope;
 
+#[cfg(test)]
+mod cloud_lifecycle_tests;
 #[cfg(test)]
 mod cloud_recovery_bridge_tests;
 #[cfg(test)]
@@ -36,6 +43,11 @@ pub use cloud::{
     CloudErrorCategory, CloudField, CloudInvocation, CloudPrompt, CloudTaskId, CloudTaskListPage,
     CloudTaskStatus, CloudTaskSummary, CloudTaskUrl, decode_cloud_diff, decode_cloud_exec,
     decode_cloud_list, decode_cloud_status, decode_cloud_version,
+};
+pub use cloud_lifecycle::CloudTaskOrchestrator;
+pub use cloud_lifecycle_types::{
+    CloudLifecycle, CloudLifecycleError, CloudLifecycleErrorCategory, DuplicateRiskAcknowledgement,
+    UnknownSubmitDecision,
 };
 pub use cloud_runner::CloudTaskRunner;
 pub use cloud_runner_types::{

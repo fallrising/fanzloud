@@ -173,8 +173,6 @@ impl CloudSubmitLedger {
         self.append(CloudLedgerPhase::ReconciliationObserved)
     }
 
-    // T004A1 intentionally stages this crate-private bridge before T004B consumes it.
-    #[allow(dead_code)]
     pub(crate) fn record_adopted_task(
         &mut self,
         task_id: &CloudTaskId,
@@ -203,8 +201,6 @@ impl CloudSubmitLedger {
         Ok(())
     }
 
-    // T004A1 intentionally stages this crate-private bridge before T004B consumes it.
-    #[allow(dead_code)]
     pub(crate) fn record_explicitly_abandoned(&mut self) -> Result<(), CloudRunnerError> {
         if self.latest() != CloudLedgerPhase::ReconciliationObserved || self.task_id.is_some() {
             return Err(CloudRunnerError::new(

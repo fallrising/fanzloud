@@ -289,8 +289,6 @@ impl fmt::Debug for CloudReconciliation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-// T004A1 intentionally stages this crate-private bridge before T004B consumes it.
-#[allow(dead_code)]
 pub(crate) enum CloudSubmitObservation {
     Absent,
     FailedBeforeSpawn,
@@ -300,8 +298,6 @@ pub(crate) enum CloudSubmitObservation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-// T004A1 intentionally stages this crate-private bridge before T004B consumes it.
-#[allow(dead_code)]
 pub(crate) enum CloudUnknownResolution {
     AdoptListedTask(CloudTaskId),
     ExplicitlyAbandon,

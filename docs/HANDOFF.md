@@ -13,9 +13,9 @@ code beside `CODEX_HOME`.
 
 Branch: `main`
 
-T001, T010, T002A, T002B, T002, T003, and T004A are Accepted. T004A is the latest completed
-production task. Its local acceptance is recorded in `ACCEPT-T004A`; inspect the latest commit and
-hosted CI before continuing.
+T001, T010, T002A, T002B, T002, T003, T004A, T004A1, and T004B are Accepted. T004B is the latest
+completed production task. Its local acceptance is recorded in `ACCEPT-T004B`; inspect the latest
+commit and hosted CI before continuing.
 
 ## Accepted Baseline
 
@@ -90,10 +90,30 @@ behavior or leave a runnable child.
   release race.
 - The final fresh Cursor Agent acceptance review returned `IMPLEMENTATION ACCEPTED` with no blocker.
 
+### T004A1 — submit recovery bridge
+
+- Added command-free observation for caller-created operation IDs and durable adopted/abandoned
+  terminal phases.
+- Resolution requires exact durable reconciliation evidence, is replay-idempotent, and never
+  executes another Cloud command.
+- All nine named tests, workspace gates, and final fresh Cursor Agent acceptance passed.
+
+### T004B — provider task lifecycle
+
+- Added the public provider-specific lifecycle, operation-bound unknown decisions, and named
+  duplicate-risk acknowledgement.
+- Added the bounded synced `cloud-lifecycle.json` projection, full restart repair, lower-readiness
+  gate, lower-before-upper resolution, and conflict rollback/removal.
+- Explicit cancellation targets the exact in-memory submit signal, waits without holding the state
+  mutex, and never claims provider termination; a real CLI test proves process-group reap.
+- All 18 named tests pass; the crate reports 86 unit/property tests plus 12 integration tests, and
+  ten consecutive package runs passed.
+- Two fresh Cursor Agent implementation reviews returned accepted with no blocker.
+
 ## Current T004 Decomposition
 
-T004A and its T004A1 recovery amendment are Accepted. The repaired T004B design passed fresh
-review, and T004B is now the sole Ready production task. The parent is decomposed into:
+T004A, its T004A1 recovery amendment, and T004B are Accepted. T004C is now the sole Ready
+production task. The parent is decomposed into:
 
 - T004A — CU-CLOUD-P0-01 E2 trusted submit/status/list runner.
 - T004A1 — CU-CLOUD-P0-01 E2 prompt-free observation and explicit unknown terminalization.
@@ -105,8 +125,7 @@ freezing incomplete backend/event types in the provider-specific P0. It also def
 provider-task and Codebox-managed state while excluding byte comparisons of provider-owned
 credential storage.
 
-T004C remains dependency-blocked on T004B; the T004 parent remains Blocked until both remaining
-children are separately Accepted.
+The T004 parent remains Blocked until T004C and the combined composition gates are Accepted.
 
 ## Verified Pinned Cloud Surface
 
@@ -139,22 +158,23 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Generate all 18 named SPEC-T004B lifecycle test skeletons before production edits.
-2. Implement the durable lifecycle projection, restart repair, explicit recovery, and cancellation
-   coordination.
-3. Run focused/workspace gates and request a fresh Cursor Agent acceptance review before making
-   T004C Ready.
+1. Generate all 11 named SPEC-T004C diff-reader test skeletons before production edits.
+2. Implement the opaque ready/applied task authority and bounded E0 diff reader without any apply,
+   checkout, artifact, or local repository surface.
+3. Run focused/workspace gates and request a fresh Cursor Agent acceptance review before the T004
+   parent composition acceptance.
 
 Do not re-run T001/T010/T002 acceptance work unless their relevant files or behavior change.
 
 ## Validation Evidence
 
-The accepted T004A1 tree passed:
+The accepted T004B tree passed:
 
 ```text
 cargo fmt --all -- --check
 cargo test -p codebox-agent-codex --all-features
-  68 unit/property tests + 12 integration tests passed
+  86 unit/property tests + 12 integration tests passed
+  repeated 10 consecutive package runs passed
 cargo clippy -p codebox-agent-codex --all-targets --all-features -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
@@ -166,5 +186,4 @@ git diff --check
 
 `cargo deny check` requires access to the user advisory-cache lock in this environment and was run
 with the approved permission. All listed commands passed locally. Hosted evidence must be checked
-against the pushed T004A commit; this handoff does not claim a run that had not completed when the
-acceptance record was written.
+against the pushed T004B commit.

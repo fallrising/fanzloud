@@ -303,8 +303,7 @@ impl CloudTaskRunner {
 
     /// Observes and crash-classifies one durable submit without executing a Cloud command.
     ///
-    /// Contract: `CU-CLOUD-P0-01`. T004A1 stages this crate-private bridge for T004B.
-    #[allow(dead_code)]
+    /// Contract: `CU-CLOUD-P0-01`. T004B consumes this T004A1 crate-private bridge.
     pub(crate) fn observe_submit(
         &self,
         operation_id: CloudSubmitOperationId,
@@ -316,8 +315,7 @@ impl CloudTaskRunner {
 
     /// Durably applies one T004B-authorized resolution without executing a Cloud command.
     ///
-    /// Contract: `CU-CLOUD-P0-01`. T004A1 stages this crate-private bridge for T004B.
-    #[allow(dead_code)]
+    /// Contract: `CU-CLOUD-P0-01`. T004B consumes this T004A1 crate-private bridge.
     pub(crate) fn resolve_unknown(
         &self,
         operation_id: CloudSubmitOperationId,
@@ -394,7 +392,7 @@ impl CloudTaskRunner {
         self.classify_observation(operation_id, Some(&ledger))
     }
 
-    fn acquire_scope(&self) -> Result<OwnedCredentialScopeLease, CloudRunnerError> {
+    pub(crate) fn acquire_scope(&self) -> Result<OwnedCredentialScopeLease, CloudRunnerError> {
         self.scope.acquire_owned().map_err(map_scope_error)
     }
 
@@ -506,8 +504,6 @@ impl CloudTaskRunner {
         }
     }
 
-    // T004A1 intentionally stages this crate-private bridge before T004B consumes it.
-    #[allow(dead_code)]
     fn classify_observation(
         &self,
         requested: CloudSubmitOperationId,

@@ -1,7 +1,7 @@
 ---
 id: SPEC-T004B
 subject: T004B Codex Cloud task lifecycle policy
-status: ready
+status: accepted
 contract_units: [CU-AGT-P0-02]
 archetypes: [C, D]
 atomicity: E2
@@ -395,4 +395,10 @@ coordination.
 
 Two follow-up reviews required the lower-readiness gate to precede every local `Submitting` commit
 and a named fault test for post-gate conflict rollback. The final fresh review returned
-`DESIGN ACCEPTED`. T004A1 is now Accepted, so T004B is the sole Ready production task.
+`DESIGN ACCEPTED`. T004A1 was then Accepted and the implementation proceeded.
+
+# Acceptance
+
+All 18 required tests, repeated concurrency/process runs, focused/workspace gates, dependency
+policy, and two fresh Cursor Agent implementation reviews passed. Evidence:
+[`ACCEPT-T004B`](../acceptance/T004B.acceptance.md).

@@ -1,7 +1,7 @@
 ---
 id: SPEC-T004C
 subject: T004C provider-managed task diff retrieval
-status: proposed
+status: ready
 contract_units: [CU-CLOUD-P0-02]
 archetypes: [D, F]
 atomicity: E0

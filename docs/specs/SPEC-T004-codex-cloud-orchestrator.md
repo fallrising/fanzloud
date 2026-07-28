@@ -42,11 +42,10 @@ Ready at a time. `[NEW-SPEC]`
 
 # Composition Rules
 
-- T004A and T004A1 are Accepted; T004B is the sole Ready production child.
+- T004A, T004A1, and T004B are Accepted; T004C is the sole Ready production child.
 - A child owns exactly the CU and atomicity listed in its task.
 - Shared process code may be private implementation, but its fault tests are claimed by each
   affected CU; sharing code does not merge acceptance.
-- T004C remains Blocked until its listed dependencies are Accepted.
 - T004 remains Blocked until all child acceptance reports are Accepted and the combined P14/P15
   suite passes.
 
