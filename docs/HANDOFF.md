@@ -13,9 +13,9 @@ code beside `CODEX_HOME`.
 
 Branch: `main`
 
-T001, T010, T002A, T002B, T002, T003, T004A, T004A1, and T004B are Accepted. T004B is the latest
-completed production task. Its local acceptance is recorded in `ACCEPT-T004B`; inspect the latest
-commit and hosted CI before continuing.
+T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, and T004C are Accepted. T004C is the
+latest completed production task. Its local acceptance is recorded in `ACCEPT-T004C`. The T004
+coordination parent is Ready for its fresh composition review.
 
 ## Accepted Baseline
 
@@ -110,10 +110,24 @@ behavior or leave a runnable child.
   ten consecutive package runs passed.
 - Two fresh Cursor Agent implementation reviews returned accepted with no blocker.
 
+### T004C — provider-managed diff retrieval
+
+- Added an opaque task authority minted only from the current durable Ready/Applied lifecycle and a
+  reader constructible only from the same orchestrator.
+- Retrieval revalidates exact lifecycle and submit-ledger operation/task/configuration provenance
+  under one held scope lease before executing the exact pinned first-attempt diff argv.
+- Added validate-only diagnostic sentinel enforcement, 2-MiB stdout / 64-KiB stderr retained
+  capture with continued draining, typed redacted failures, cancellation/timeout/reap handling, and
+  no local application or artifact surface.
+- All 11 named tests pass; the crate reports 97 unit/property tests plus 12 integration tests.
+- The real cancellation/reap and stdout/stderr drain tests each passed ten consecutive runs.
+- The final fresh Cursor Agent implementation review returned `IMPLEMENTATION ACCEPTED` with no
+  blocker.
+
 ## Current T004 Decomposition
 
-T004A, its T004A1 recovery amendment, and T004B are Accepted. T004C is now the sole Ready
-production task. The parent is decomposed into:
+T004A, its T004A1 recovery amendment, T004B, and T004C are independently Accepted. The parent is
+Ready for composition acceptance over:
 
 - T004A — CU-CLOUD-P0-01 E2 trusted submit/status/list runner.
 - T004A1 — CU-CLOUD-P0-01 E2 prompt-free observation and explicit unknown terminalization.
@@ -125,7 +139,8 @@ freezing incomplete backend/event types in the provider-specific P0. It also def
 provider-task and Codebox-managed state while excluding byte comparisons of provider-owned
 credential storage.
 
-The T004 parent remains Blocked until T004C and the combined composition gates are Accepted.
+The combined local workspace, P14, and P15 gates pass. The T004 parent still requires its separate
+fresh composition review and acceptance report.
 
 ## Verified Pinned Cloud Surface
 
@@ -158,23 +173,22 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Generate all 11 named SPEC-T004C diff-reader test skeletons before production edits.
-2. Implement the opaque ready/applied task authority and bounded E0 diff reader without any apply,
-   checkout, artifact, or local repository surface.
-3. Run focused/workspace gates and request a fresh Cursor Agent acceptance review before the T004
-   parent composition acceptance.
+1. Request the fresh T004 parent composition review against all four accepted child reports and the
+   combined P14/P15/workspace evidence.
+2. If accepted, record `ACCEPT-T004`, mark the parent Accepted, and hand off T005 as the next P0
+   slice.
 
 Do not re-run T001/T010/T002 acceptance work unless their relevant files or behavior change.
 
 ## Validation Evidence
 
-The accepted T004B tree passed:
+The accepted T004C tree passed:
 
 ```text
 cargo fmt --all -- --check
 cargo test -p codebox-agent-codex --all-features
-  86 unit/property tests + 12 integration tests passed
-  repeated 10 consecutive package runs passed
+  97 unit/property tests + 12 integration tests passed
+  real cancellation/reap and stdout/stderr drain tests each repeated 10 consecutive runs
 cargo clippy -p codebox-agent-codex --all-targets --all-features -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features

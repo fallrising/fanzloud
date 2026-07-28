@@ -1,7 +1,7 @@
 ---
 id: SPEC-T004C
 subject: T004C provider-managed task diff retrieval
-status: specifying
+status: accepted
 contract_units: [CU-CLOUD-P0-02]
 archetypes: [D, F]
 atomicity: E0
@@ -227,3 +227,10 @@ capture limits onto the shared supervisor. This revision closes those implementa
 gaps while rejecting a public `CloudDiffReader::new(&CloudTaskRunner)` constructor in favor of
 orchestrator-only composition. ADR-0003 resolves the E0 state scope. No in-scope `[TD-GAP]`
 remains.
+
+# Acceptance
+
+T004C is Accepted in [`ACCEPT-T004C`](../acceptance/T004C.acceptance.md). All 11 named tests,
+97 package unit/property tests, 12 integration tests, repeated real process cancellation/drain
+tests, workspace gates, dependency policy, and the final fresh read-only implementation review
+passed.

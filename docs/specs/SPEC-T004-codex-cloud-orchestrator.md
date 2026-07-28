@@ -1,7 +1,7 @@
 ---
 id: SPEC-T004
 subject: T004 Codex Cloud task orchestrator parent
-status: proposed
+status: decomposed
 contract_units: [CU-AGT-P0-02, CU-CLOUD-P0-01, CU-CLOUD-P0-02]
 atomicity: split
 retriable: false
@@ -42,12 +42,13 @@ Ready at a time. `[NEW-SPEC]`
 
 # Composition Rules
 
-- T004A, T004A1, and T004B are Accepted; T004C is the sole Ready production child.
+- T004A, T004A1, T004B, and T004C are independently Accepted; the parent is Ready for composition
+  acceptance.
 - A child owns exactly the CU and atomicity listed in its task.
 - Shared process code may be private implementation, but its fault tests are claimed by each
   affected CU; sharing code does not merge acceptance.
-- T004 remains Blocked until all child acceptance reports are Accepted and the combined P14/P15
-  suite passes.
+- T004 remains unaccepted until the combined P14/P15 suite, workspace gates, and fresh composition
+  review pass.
 
 # Cross-Child Security Contract
 
