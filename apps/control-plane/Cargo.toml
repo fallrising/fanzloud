@@ -5,3 +5,22 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[dependencies]
+axum = "0.8"
+base64 = "0.22"
+bytes = "1"
+codebox-agent-codex = { version = "=0.0.0", path = "../../crates/codebox-agent-codex" }
+codebox-domain = { version = "=0.0.0", path = "../../crates/codebox-domain" }
+codebox-session-runtime = { version = "=0.0.0", path = "../../crates/codebox-session-runtime" }
+getrandom = "0.4"
+http-body-util = "0.1"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "1"
+thiserror = "=2.0.18"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
+url = "2"
+uuid = { version = "1", features = ["serde"] }
+
+[dev-dependencies]
+http-body = "1"
+tower = { version = "0.5", features = ["util"] }
