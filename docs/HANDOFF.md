@@ -244,9 +244,11 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Materialize T006 from the accepted TD as the next spec-first minimal private operator web flow.
-2. Materialize T007 only after T006, then run deterministic/live subscription end-to-end
-   acceptance.
+1. Resume the new SPEC-T006 fresh read-only design review. Cursor and Grok each reached the owner's
+   80-second limit without a verdict; the authorized Codex fallback was interrupted when the owner
+   paused work, so no design verdict has been recorded.
+2. Implement and accept the dependency-free private operator page, then materialize T007 only
+   after T006 is Accepted.
 
 ADR-0004 and the complete T005 decomposition received fresh Cursor Agent design acceptance after
 three rejected drafts repaired durability/authentication, state-transition, cancel/shutdown,
