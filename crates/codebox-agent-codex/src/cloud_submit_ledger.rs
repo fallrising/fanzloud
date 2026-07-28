@@ -32,6 +32,8 @@ pub(crate) enum CloudLedgerPhase {
     FailedBeforeSpawn,
     OutcomeUnknown,
     ReconciliationObserved,
+    TaskAdopted,
+    ExplicitlyAbandoned,
 }
 
 impl CloudLedgerPhase {
@@ -40,7 +42,13 @@ impl CloudLedgerPhase {
     }
 
     pub(crate) const fn permits_new_operation(self) -> bool {
-        matches!(self, Self::TaskRecorded | Self::FailedBeforeSpawn)
+        matches!(
+            self,
+            Self::TaskRecorded
+                | Self::FailedBeforeSpawn
+                | Self::TaskAdopted
+                | Self::ExplicitlyAbandoned
+        )
     }
 }
 
@@ -165,6 +173,47 @@ impl CloudSubmitLedger {
         self.append(CloudLedgerPhase::ReconciliationObserved)
     }
 
+    // T004A1 intentionally stages this crate-private bridge before T004B consumes it.
+    #[allow(dead_code)]
+    pub(crate) fn record_adopted_task(
+        &mut self,
+        task_id: &CloudTaskId,
+    ) -> Result<(), CloudRunnerError> {
+        if self.latest() != CloudLedgerPhase::ReconciliationObserved {
+            return Err(CloudRunnerError::new(
+                CloudRunnerErrorCategory::ResolutionUnavailable,
+            ));
+        }
+        if self.task_id.is_some() {
+            return Err(CloudRunnerError::new(
+                CloudRunnerErrorCategory::LedgerInvalid,
+            ));
+        }
+        if !self
+            .candidate_task_ids
+            .iter()
+            .any(|candidate| candidate == task_id.as_str())
+        {
+            return Err(CloudRunnerError::new(
+                CloudRunnerErrorCategory::CandidateNotRecorded,
+            ));
+        }
+        self.append(CloudLedgerPhase::TaskAdopted)?;
+        self.task_id = Some(task_id.as_str().to_owned());
+        Ok(())
+    }
+
+    // T004A1 intentionally stages this crate-private bridge before T004B consumes it.
+    #[allow(dead_code)]
+    pub(crate) fn record_explicitly_abandoned(&mut self) -> Result<(), CloudRunnerError> {
+        if self.latest() != CloudLedgerPhase::ReconciliationObserved || self.task_id.is_some() {
+            return Err(CloudRunnerError::new(
+                CloudRunnerErrorCategory::ResolutionUnavailable,
+            ));
+        }
+        self.append(CloudLedgerPhase::ExplicitlyAbandoned)
+    }
+
     fn validate(&self) -> Result<(), CloudRunnerError> {
         if self.schema_version != CLOUD_LEDGER_SCHEMA_VERSION
             || self.operation_id.as_uuid().is_nil()
@@ -196,7 +245,8 @@ impl CloudSubmitLedger {
             ));
         }
 
-        let task_recorded = self.history.contains(&CloudLedgerPhase::TaskRecorded);
+        let task_recorded = self.history.contains(&CloudLedgerPhase::TaskRecorded)
+            || self.history.contains(&CloudLedgerPhase::TaskAdopted);
         if task_recorded != self.task_id.is_some() || self.recorded_task().is_err() {
             return Err(CloudRunnerError::new(
                 CloudRunnerErrorCategory::LedgerInvalid,
@@ -223,6 +273,16 @@ impl CloudSubmitLedger {
                 ));
             }
         }
+        if self.history.contains(&CloudLedgerPhase::TaskAdopted)
+            && self
+                .task_id
+                .as_deref()
+                .is_none_or(|task_id| !self.candidate_task_ids.iter().any(|item| item == task_id))
+        {
+            return Err(CloudRunnerError::new(
+                CloudRunnerErrorCategory::LedgerInvalid,
+            ));
+        }
 
         Ok(())
     }
@@ -248,10 +308,19 @@ fn valid_transition(from: CloudLedgerPhase, to: CloudLedgerPhase) -> bool {
                 CloudLedgerPhase::TaskRecorded | CloudLedgerPhase::OutcomeUnknown
             )
         }
-        CloudLedgerPhase::OutcomeUnknown | CloudLedgerPhase::ReconciliationObserved => {
-            to == CloudLedgerPhase::ReconciliationObserved
+        CloudLedgerPhase::OutcomeUnknown => to == CloudLedgerPhase::ReconciliationObserved,
+        CloudLedgerPhase::ReconciliationObserved => {
+            matches!(
+                to,
+                CloudLedgerPhase::ReconciliationObserved
+                    | CloudLedgerPhase::TaskAdopted
+                    | CloudLedgerPhase::ExplicitlyAbandoned
+            )
         }
-        CloudLedgerPhase::TaskRecorded | CloudLedgerPhase::FailedBeforeSpawn => false,
+        CloudLedgerPhase::TaskRecorded
+        | CloudLedgerPhase::FailedBeforeSpawn
+        | CloudLedgerPhase::TaskAdopted
+        | CloudLedgerPhase::ExplicitlyAbandoned => false,
     }
 }
 

@@ -27,6 +27,8 @@ T002 + T003
       ↓
 T004A  CU-CLOUD-P0-01 / E2 trusted submit + inspect runner
       ↓
+T004A1 CU-CLOUD-P0-01 / E2 recovery composition bridge
+      ↓
 T004B  CU-AGT-P0-02   / E2 task lifecycle
       ↓
 T004C  CU-CLOUD-P0-02 / E0 diff retrieval
@@ -34,17 +36,16 @@ T004C  CU-CLOUD-P0-02 / E0 diff retrieval
 T004 parent acceptance
 ```
 
-T004C functionally needs both the accepted trusted runner from T004A and T004B's opaque
+T004C functionally needs the accepted trusted runner plus T004A1 recovery amendment and T004B's opaque
 `DiffEligibleCloudTask` authority. The dependency order also ensures only one production child is
 Ready at a time. `[NEW-SPEC]`
 
 # Composition Rules
 
-- T004A is Accepted; T004B is the sole Ready child.
+- T004A and T004A1 are Accepted; T004B is the sole Ready production child.
 - A child owns exactly the CU and atomicity listed in its task.
 - Shared process code may be private implementation, but its fault tests are claimed by each
   affected CU; sharing code does not merge acceptance.
-- T004B became Ready only after T004A was Accepted.
 - T004C remains Blocked until its listed dependencies are Accepted.
 - T004 remains Blocked until all child acceptance reports are Accepted and the combined P14/P15
   suite passes.

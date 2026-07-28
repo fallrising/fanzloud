@@ -204,12 +204,13 @@ executes a Cloud command. `[NEW-SPEC]`
 
 If the resulting current ledger is `TaskRecorded` for the request's operation ID, `submit` returns
 that durable task without executing version, login status, or Cloud exec. If it is
-`FailedBeforeSpawn` for the same ID, `submit` returns the typed prior pre-start failure without
-executing; an explicit retry requires a new operation ID. A different operation ID may begin only
-when the current record is terminal `TaskRecorded` or `FailedBeforeSpawn`. Any request against
-`Authorized`, `Started`, `OutcomeUnknown`, or `ReconciliationObserved` returns unknown without
-Cloud exec. The prompt is not persisted; operation identity, not prompt equality, defines replay.
-`[NEW-SPEC]`
+`TaskAdopted` for the same ID, `submit` returns the typed recorded/adopted task without executing.
+If it is `FailedBeforeSpawn` or `ExplicitlyAbandoned` for the same ID, `submit` returns the typed
+prior terminal disposition without executing; an explicit later submit requires a new operation
+ID. A different operation ID may begin only when the current record is terminal `TaskRecorded`,
+`TaskAdopted`, `FailedBeforeSpawn`, or `ExplicitlyAbandoned`. Any request against `Authorized`,
+`Started`, `OutcomeUnknown`, or `ReconciliationObserved` returns unknown without Cloud exec. The
+prompt is not persisted; operation identity, not prompt equality, defines replay. `[NEW-SPEC]`
 
 # Durable Ledger
 
@@ -233,13 +234,16 @@ Started → TaskRecorded
 Started → OutcomeUnknown
 OutcomeUnknown → ReconciliationObserved
 ReconciliationObserved → ReconciliationObserved
+ReconciliationObserved → TaskAdopted
+ReconciliationObserved → ExplicitlyAbandoned
 ```
 
 `Started` contains the Linux PID/start-time identity. `TaskRecorded` contains the validated task
 ID. `ReconciliationObserved` retains `OutcomeUnknown` as the operation disposition and records only
-bounded validated candidate IDs plus whether pagination completed. Terminal `TaskRecorded` and
-`FailedBeforeSpawn` permit a later independent submission; `OutcomeUnknown` and
-`ReconciliationObserved` do not. `[NEW-SPEC]`
+bounded validated candidate IDs plus whether pagination completed. SPEC-T004A1 adds crate-private
+T004B-authorized `TaskAdopted` and `ExplicitlyAbandoned` terminal phases. Terminal
+`TaskRecorded`, `TaskAdopted`, `ExplicitlyAbandoned`, and `FailedBeforeSpawn` permit a later
+independent submission; `OutcomeUnknown` and `ReconciliationObserved` do not. `[NEW-SPEC]`
 
 # Crash, Cancellation, and Failure Matrix
 
@@ -275,10 +279,11 @@ without changing the unknown disposition.
 
 The pinned list rows contain no stable client submission key or exact prompt/branch correlation.
 Therefore neither zero, one, nor many candidates proves which task belongs to the interrupted
-submit. T004A does not select, adopt, abandon, or retry a candidate and exposes no retry method.
-T004B must require an explicit operator recovery action if it resolves the lifecycle. This is the
-conservative implementation of ADR-0002 and INV-006, not an inferred provider guarantee.
-`[NEW-SPEC]`
+submit. T004A does not select a candidate or expose public adopt, abandon, or retry authority.
+SPEC-T004A1 adds only a crate-private commit bridge: after T004B validates an explicit
+operation-bound decision, it can terminalize the exact reconciled lower ledger without executing
+Cloud exec. Reconciliation alone continues to authorize nothing. This is the conservative
+implementation of ADR-0002 and INV-006, not an inferred provider guarantee. `[NEW-SPEC]`
 
 # Archetype C Answers
 
@@ -409,8 +414,9 @@ replays the same operation ID, and proves the same task is returned with a Cloud
 
 All bounds, ledger shapes, process reuse, and conservative reconciliation behavior are
 `[NEW-SPEC]` local derivations of TD §§4.8, 8, 11 and ADR-0002. They do not authorize a retry or
-weaken the credential boundary. No in-scope `[TD-GAP]` remains; T004B owns explicit provider task
-lifecycle and recovery action after T004A returns candidates.
+weaken the credential boundary. SPEC-T004A1 owns prompt-free observation and lower-ledger
+terminalization; T004B owns the explicit provider task lifecycle and recovery decision. No
+in-scope `[TD-GAP]` remains.
 
 # Design Review
 

@@ -29,11 +29,17 @@ should be prevented independently.
 
 ## Keep P0 provider-specific
 
-T004 contains three children only:
+T004 contains three provider outcomes plus one narrow recovery amendment:
 
 - T004A — CU-CLOUD-P0-01 E2 trusted submit/status/list runner.
+- T004A1 — CU-CLOUD-P0-01 E2 prompt-free observation and explicit unknown terminalization bridge.
 - T004B — CU-AGT-P0-02 E2 Cloud task lifecycle.
 - T004C — CU-CLOUD-P0-02 E0 Cloud diff retrieval.
+
+T004A1 was added after T004B implementation preparation proved that the accepted public submit
+surface could neither recover an orphaned local `Submitting` projection without a prompt nor
+terminalize an explicitly resolved unknown ledger. Its methods remain crate-private, command-free,
+and callable only by the reviewed T004B policy; it adds no public retry or decision authority.
 
 CU-BKD-01 remains owned by T180, after T020 defines versioned canonical events. T005 may consume
 the accepted provider-specific T004 lifecycle directly for the private Codex-only P0. It must not
@@ -70,7 +76,8 @@ review every cwd-relative write before retaining this control.
 
 # Consequences
 
-- T004D is removed from the P0 graph; T004 depends on T004A–T004C.
+- T004D is removed from the P0 graph; T004 depends on T004A, its T004A1 recovery amendment, T004B,
+  and T004C.
 - T005 can proceed after those three children and parent composition acceptance without waiting for
   T020/T180.
 - T180 remains the one owner of CU-BKD-01 and the generic backend compatibility surface.

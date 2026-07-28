@@ -288,6 +288,25 @@ impl fmt::Debug for CloudReconciliation {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+// T004A1 intentionally stages this crate-private bridge before T004B consumes it.
+#[allow(dead_code)]
+pub(crate) enum CloudSubmitObservation {
+    Absent,
+    FailedBeforeSpawn,
+    OutcomeUnknown,
+    TaskRecorded(CloudSubmission),
+    ExplicitlyAbandoned,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+// T004A1 intentionally stages this crate-private bridge before T004B consumes it.
+#[allow(dead_code)]
+pub(crate) enum CloudUnknownResolution {
+    AdoptListedTask(CloudTaskId),
+    ExplicitlyAbandon,
+}
+
 /// Redacted Cloud runner failure class.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CloudRunnerErrorCategory {
@@ -306,8 +325,13 @@ pub enum CloudRunnerErrorCategory {
     OutcomeUnknown,
     RecoveryRequired,
     PriorFailedBeforeSpawn,
+    PriorExplicitlyAbandoned,
     ReconciliationCycle,
     NoUnknownOperation,
+    OperationConflict,
+    ResolutionUnavailable,
+    ResolutionConflict,
+    CandidateNotRecorded,
 }
 
 impl fmt::Display for CloudRunnerErrorCategory {
@@ -328,8 +352,13 @@ impl fmt::Display for CloudRunnerErrorCategory {
             Self::OutcomeUnknown => "Cloud submit outcome requires reconciliation",
             Self::RecoveryRequired => "Cloud submit recovery requires operator action",
             Self::PriorFailedBeforeSpawn => "submit previously failed before spawn",
+            Self::PriorExplicitlyAbandoned => "submit was explicitly abandoned",
             Self::ReconciliationCycle => "provider pagination contains a cycle",
             Self::NoUnknownOperation => "no unknown Cloud submit can be reconciled",
+            Self::OperationConflict => "another Cloud submit operation owns the durable state",
+            Self::ResolutionUnavailable => "Cloud submit cannot be resolved in its current state",
+            Self::ResolutionConflict => "Cloud submit already has a different resolution",
+            Self::CandidateNotRecorded => "Cloud task is not in the recorded candidate set",
         })
     }
 }

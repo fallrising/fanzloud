@@ -11,7 +11,8 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
 use crate::cloud_runner_types::{
     CloudCancellation, CloudReconciliation, CloudRunnerConfig, CloudRunnerError,
-    CloudRunnerErrorCategory, CloudSubmission, CloudSubmitOperationId, CloudSubmitRequest,
+    CloudRunnerErrorCategory, CloudSubmission, CloudSubmitObservation, CloudSubmitOperationId,
+    CloudSubmitRequest, CloudUnknownResolution,
 };
 use crate::cloud_submit_ledger::{
     CloudLedgerPhase, CloudSubmitLedger, load_cloud_ledger, persist_cloud_ledger,
@@ -300,6 +301,99 @@ impl CloudTaskRunner {
         ))
     }
 
+    /// Observes and crash-classifies one durable submit without executing a Cloud command.
+    ///
+    /// Contract: `CU-CLOUD-P0-01`. T004A1 stages this crate-private bridge for T004B.
+    #[allow(dead_code)]
+    pub(crate) fn observe_submit(
+        &self,
+        operation_id: CloudSubmitOperationId,
+    ) -> Result<CloudSubmitObservation, CloudRunnerError> {
+        let lease = self.acquire_scope()?;
+        let ledger = self.recover_current_ledger(&lease)?;
+        self.classify_observation(operation_id, ledger.as_ref())
+    }
+
+    /// Durably applies one T004B-authorized resolution without executing a Cloud command.
+    ///
+    /// Contract: `CU-CLOUD-P0-01`. T004A1 stages this crate-private bridge for T004B.
+    #[allow(dead_code)]
+    pub(crate) fn resolve_unknown(
+        &self,
+        operation_id: CloudSubmitOperationId,
+        resolution: CloudUnknownResolution,
+    ) -> Result<CloudSubmitObservation, CloudRunnerError> {
+        let lease = self.acquire_scope()?;
+        let mut ledger = self.recover_current_ledger(&lease)?.ok_or_else(|| {
+            CloudRunnerError::new(CloudRunnerErrorCategory::ResolutionUnavailable)
+        })?;
+        if ledger.operation_id() != operation_id {
+            return Err(CloudRunnerError::for_operation(
+                CloudRunnerErrorCategory::OperationConflict,
+                ledger.operation_id(),
+            ));
+        }
+
+        match ledger.latest() {
+            CloudLedgerPhase::TaskAdopted => {
+                let recorded = ledger.recorded_task()?.ok_or_else(|| {
+                    CloudRunnerError::new(CloudRunnerErrorCategory::LedgerInvalid)
+                })?;
+                return match resolution {
+                    CloudUnknownResolution::AdoptListedTask(task_id) if task_id == recorded => {
+                        Ok(CloudSubmitObservation::TaskRecorded(CloudSubmission::new(
+                            operation_id,
+                            recorded,
+                        )))
+                    }
+                    CloudUnknownResolution::AdoptListedTask(_)
+                    | CloudUnknownResolution::ExplicitlyAbandon => {
+                        Err(CloudRunnerError::for_operation(
+                            CloudRunnerErrorCategory::ResolutionConflict,
+                            operation_id,
+                        ))
+                    }
+                };
+            }
+            CloudLedgerPhase::ExplicitlyAbandoned => {
+                return match resolution {
+                    CloudUnknownResolution::ExplicitlyAbandon => {
+                        Ok(CloudSubmitObservation::ExplicitlyAbandoned)
+                    }
+                    CloudUnknownResolution::AdoptListedTask(_) => {
+                        Err(CloudRunnerError::for_operation(
+                            CloudRunnerErrorCategory::ResolutionConflict,
+                            operation_id,
+                        ))
+                    }
+                };
+            }
+            CloudLedgerPhase::ReconciliationObserved => {}
+            CloudLedgerPhase::Intent
+            | CloudLedgerPhase::Authorized
+            | CloudLedgerPhase::Started
+            | CloudLedgerPhase::TaskRecorded
+            | CloudLedgerPhase::FailedBeforeSpawn
+            | CloudLedgerPhase::OutcomeUnknown => {
+                return Err(CloudRunnerError::for_operation(
+                    CloudRunnerErrorCategory::ResolutionUnavailable,
+                    operation_id,
+                ));
+            }
+        }
+
+        match resolution {
+            CloudUnknownResolution::AdoptListedTask(task_id) => {
+                ledger.record_adopted_task(&task_id)?;
+            }
+            CloudUnknownResolution::ExplicitlyAbandon => {
+                ledger.record_explicitly_abandoned()?;
+            }
+        }
+        persist_cloud_ledger(lease.state_dir(), lease.runner_uid(), &ledger)?;
+        self.classify_observation(operation_id, Some(&ledger))
+    }
+
     fn acquire_scope(&self) -> Result<OwnedCredentialScopeLease, CloudRunnerError> {
         self.scope.acquire_owned().map_err(map_scope_error)
     }
@@ -341,7 +435,9 @@ impl CloudTaskRunner {
             CloudLedgerPhase::TaskRecorded
             | CloudLedgerPhase::FailedBeforeSpawn
             | CloudLedgerPhase::OutcomeUnknown
-            | CloudLedgerPhase::ReconciliationObserved => {}
+            | CloudLedgerPhase::ReconciliationObserved
+            | CloudLedgerPhase::TaskAdopted
+            | CloudLedgerPhase::ExplicitlyAbandoned => {}
         }
         Ok(Some(ledger))
     }
@@ -379,7 +475,7 @@ impl CloudTaskRunner {
             };
         }
         match ledger.latest() {
-            CloudLedgerPhase::TaskRecorded => Some(
+            CloudLedgerPhase::TaskRecorded | CloudLedgerPhase::TaskAdopted => Some(
                 ledger
                     .recorded_task()
                     .and_then(|task| {
@@ -393,6 +489,10 @@ impl CloudTaskRunner {
                 CloudRunnerErrorCategory::PriorFailedBeforeSpawn,
                 requested,
             ))),
+            CloudLedgerPhase::ExplicitlyAbandoned => Some(Err(CloudRunnerError::for_operation(
+                CloudRunnerErrorCategory::PriorExplicitlyAbandoned,
+                requested,
+            ))),
             CloudLedgerPhase::Intent
             | CloudLedgerPhase::Authorized
             | CloudLedgerPhase::Started
@@ -402,6 +502,51 @@ impl CloudTaskRunner {
                     CloudRunnerErrorCategory::OutcomeUnknown,
                     requested,
                 )))
+            }
+        }
+    }
+
+    // T004A1 intentionally stages this crate-private bridge before T004B consumes it.
+    #[allow(dead_code)]
+    fn classify_observation(
+        &self,
+        requested: CloudSubmitOperationId,
+        ledger: Option<&CloudSubmitLedger>,
+    ) -> Result<CloudSubmitObservation, CloudRunnerError> {
+        let Some(ledger) = ledger else {
+            return Ok(CloudSubmitObservation::Absent);
+        };
+        if ledger.operation_id() != requested {
+            return if ledger.latest().permits_new_operation() {
+                Ok(CloudSubmitObservation::Absent)
+            } else {
+                Err(CloudRunnerError::for_operation(
+                    CloudRunnerErrorCategory::OperationConflict,
+                    ledger.operation_id(),
+                ))
+            };
+        }
+
+        match ledger.latest() {
+            CloudLedgerPhase::FailedBeforeSpawn => Ok(CloudSubmitObservation::FailedBeforeSpawn),
+            CloudLedgerPhase::OutcomeUnknown | CloudLedgerPhase::ReconciliationObserved => {
+                Ok(CloudSubmitObservation::OutcomeUnknown)
+            }
+            CloudLedgerPhase::TaskRecorded | CloudLedgerPhase::TaskAdopted => {
+                let task_id = ledger.recorded_task()?.ok_or_else(|| {
+                    CloudRunnerError::new(CloudRunnerErrorCategory::LedgerInvalid)
+                })?;
+                Ok(CloudSubmitObservation::TaskRecorded(CloudSubmission::new(
+                    requested, task_id,
+                )))
+            }
+            CloudLedgerPhase::ExplicitlyAbandoned => {
+                Ok(CloudSubmitObservation::ExplicitlyAbandoned)
+            }
+            CloudLedgerPhase::Intent | CloudLedgerPhase::Authorized | CloudLedgerPhase::Started => {
+                Err(CloudRunnerError::new(
+                    CloudRunnerErrorCategory::LedgerInvalid,
+                ))
             }
         }
     }

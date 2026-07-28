@@ -1618,7 +1618,8 @@ flowchart TD
     T010 --> T003
     T002 --> T004A[T004A Trusted Cloud Runner]
     T003 --> T004A
-    T004A --> T004B[T004B Cloud Task Lifecycle]
+    T004A --> T004A1[T004A1 Cloud Recovery Bridge]
+    T004A1 --> T004B[T004B Cloud Task Lifecycle]
     T004B --> T004C[T004C Cloud Diff Retrieval]
     T004C --> T004[T004 Orchestrator Parent]
     T004 --> T005[T005 P0 Session API and Stream]
@@ -1634,7 +1635,8 @@ flowchart TD
 | T002 | Accepted login-broker parent | CU-AUTH-P0-01, CU-AUTH-P0-02 | T002A,T002B | Both child acceptances plus combined workspace and P14 security gates |
 | T003 | Version-pinned Codex Cloud fixed-command and output decoder | CU-AGT-P0-01 | T001,T010 | Source-derived fixtures, malformed output, argv injection, version, task-status, list, diff-bound, and redaction tests |
 | T004A | Trusted fixed Codex Cloud submit/status/list runner | CU-CLOUD-P0-01 | T002,T003 | Durable E2 submit ledger, bounded list reconciliation, launcher faults, full P14, and exact P15 |
-| T004B | Codex Cloud task lifecycle and local cancellation policy | CU-AGT-P0-02 | T004A | Status/lifecycle, explicit recovery, disconnect, local cancel, ordering, and no-automatic-retry tests |
+| T004A1 | Prompt-free Cloud submit recovery composition bridge | CU-CLOUD-P0-01 | T004A | Observation matrix, explicit adopted/abandoned terminalization, replay, conflict, and no-extra-exec tests |
+| T004B | Codex Cloud task lifecycle and local cancellation policy | CU-AGT-P0-02 | T004A1 | Durable lifecycle, status, explicit recovery, disconnect, local cancel, ordering, and no-automatic-retry tests |
 | T004C | Provider-managed task diff retrieval | CU-CLOUD-P0-02 | T004A,T004B | E0 state snapshots, bounded drain, redaction, diagnostic-write prevention, and no-apply tests |
 | T004 | Accepted provider-specific Codex Cloud orchestrator coordination parent | CU-AGT-P0-02, CU-CLOUD-P0-01, CU-CLOUD-P0-02 | T004A,T004B,T004C | All child acceptances plus combined no-local-execution and workspace gates; ADR-0003 keeps CU-BKD-01 in T180 |
 | T005 | P0 login/session HTTP API and replayable live stream | CU-SES-P0-01, CU-API-P0-01, CU-API-P0-02 | T004 | HTTP, ordering, reconnect, cancel, cleanup, and redaction contract tests |
@@ -2011,6 +2013,8 @@ T001 P0 Subscription Boundary
   └→ T003 Codex Cloud CLI Adapter
         ↓
 T004A Trusted Cloud Runner
+  ↓
+T004A1 Cloud Recovery Bridge
   ↓
 T004B Cloud Task Lifecycle
   ↓

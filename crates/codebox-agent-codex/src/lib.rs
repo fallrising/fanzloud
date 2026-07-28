@@ -22,6 +22,8 @@ mod runtime;
 mod scope;
 
 #[cfg(test)]
+mod cloud_recovery_bridge_tests;
+#[cfg(test)]
 mod cloud_runner_tests;
 #[cfg(test)]
 mod cloud_tests;

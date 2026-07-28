@@ -92,9 +92,11 @@ behavior or leave a runnable child.
 
 ## Current T004 Decomposition
 
-T004A is Accepted and T004B is the sole Ready production task. The parent is decomposed into:
+T004A and its T004A1 recovery amendment are Accepted. The repaired T004B design passed fresh
+review, and T004B is now the sole Ready production task. The parent is decomposed into:
 
 - T004A — CU-CLOUD-P0-01 E2 trusted submit/status/list runner.
+- T004A1 — CU-CLOUD-P0-01 E2 prompt-free observation and explicit unknown terminalization.
 - T004B — CU-AGT-P0-02 E2 provider task lifecycle.
 - T004C — CU-CLOUD-P0-02 E0 provider-managed diff retrieval.
 
@@ -103,8 +105,8 @@ freezing incomplete backend/event types in the provider-specific P0. It also def
 provider-task and Codebox-managed state while excluding byte comparisons of provider-owned
 credential storage.
 
-T004C remains dependency-blocked on T004B; the T004 parent remains Blocked until T004B and T004C
-are separately Accepted.
+T004C remains dependency-blocked on T004B; the T004 parent remains Blocked until both remaining
+children are separately Accepted.
 
 ## Verified Pinned Cloud Surface
 
@@ -137,9 +139,9 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Generate every named SPEC-T004B lifecycle test skeleton before production edits.
-2. Implement the serialized Cloud task lifecycle, explicit unknown-submit recovery decisions,
-   browser-disconnect independence, and local-only cancellation semantics.
+1. Generate all 18 named SPEC-T004B lifecycle test skeletons before production edits.
+2. Implement the durable lifecycle projection, restart repair, explicit recovery, and cancellation
+   coordination.
 3. Run focused/workspace gates and request a fresh Cursor Agent acceptance review before making
    T004C Ready.
 
@@ -147,13 +149,12 @@ Do not re-run T001/T010/T002 acceptance work unless their relevant files or beha
 
 ## Validation Evidence
 
-The accepted T004A tree passed:
+The accepted T004A1 tree passed:
 
 ```text
 cargo fmt --all -- --check
 cargo test -p codebox-agent-codex --all-features
-  59 unit/property tests + 12 integration tests passed
-  repeated 10 consecutive parallel package runs passed
+  68 unit/property tests + 12 integration tests passed
 cargo clippy -p codebox-agent-codex --all-targets --all-features -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
