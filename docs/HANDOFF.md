@@ -13,9 +13,9 @@ code beside `CODEX_HOME`.
 
 Branch: `main`
 
-T001, T010, T002A, T002B, T002, and T003 are Accepted. T003 is the latest completed production task.
-Inspect `git status`, the latest commit, and hosted CI before continuing; this handoff does not claim
-a hosted result for T003.
+T001, T010, T002A, T002B, T002, T003, and T004A are Accepted. T004A is the latest completed
+production task. Its local acceptance is recorded in `ACCEPT-T004A`; inspect the latest commit and
+hosted CI before continuing.
 
 ## Accepted Baseline
 
@@ -32,6 +32,8 @@ a hosted result for T003.
   directory overlap.
 - Exposes only fixed version/login-status/device-login argv and cleared-environment policy.
 - Uses a mode-`0600`, descriptor-validated, nonblocking `flock` lease.
+- Explicitly unlocks on lease drop so a concurrently forked child's pre-exec descriptor copy cannot
+  extend the intended lease lifetime.
 - Never reads `auth.json` or starts Codex.
 - One unit test plus 12 integration contract/security tests pass.
 - Fresh Claude acceptance returned `ACCEPTED`.
@@ -72,17 +74,37 @@ behavior or leave a runnable child.
 - A fresh, read-only Cursor Agent acceptance review returned `ACCEPTED` with no blocker. Claude was
   unavailable at its usage limit; the project owner explicitly authorized the replacement reviewer.
 
-## Current Ready Task
+### T004A — trusted Codex Cloud command runner
 
-No production implementation task is Ready. The next documentation task is to decompose the T004
-integration parent into separate atomicity-specific children before writing T004 code.
+- Added typed administrator configuration and caller-created non-nil submit operation/request
+  values.
+- Executes only the pinned version, login-status, Cloud exec, status, and bounded list invocations
+  under the accepted credential lease and private process policy.
+- Added the mode-`0700` `error.log/` directory sentinel, bounded dual-pipe supervision, deadlines,
+  process-group termination, parent-death binding, and direct-child reap.
+- Added the synced versioned submit ledger with intent/authorization/start/task commits,
+  observation-only same-ID replay, fail-closed crash recovery, and no automatic retry.
+- Added bounded reconciliation that records zero/one/many candidates without inferring task identity.
+- All 19 named T004A tests pass; the crate reports 59 unit/property tests plus 12 integration tests.
+- The package suite passed ten consecutive parallel runs after fixing the fork-inherited lease
+  release race.
+- The final fresh Cursor Agent acceptance review returned `IMPLEMENTATION ACCEPTED` with no blocker.
 
-The original T003 seed mixed E0, E2, and E3 CUs. TD §9.3 corrected the boundary:
+## Current T004 Decomposition
 
-- T003 retains CU-AGT-P0-01 E0.
-- CU-AGT-P0-02 E2 and CU-BKD-01 E3 move to the future T004 parent.
-- T004 also owns CU-CLOUD-P0-01 E2 and CU-CLOUD-P0-02 E0 and must be decomposed into separate
-  atomicity-specific children before any T004 implementation.
+T004A is Accepted and T004B is the sole Ready production task. The parent is decomposed into:
+
+- T004A — CU-CLOUD-P0-01 E2 trusted submit/status/list runner.
+- T004B — CU-AGT-P0-02 E2 provider task lifecycle.
+- T004C — CU-CLOUD-P0-02 E0 provider-managed diff retrieval.
+
+ADR-0003 keeps generic CU-BKD-01 conformance in its existing T180 task after T020 rather than
+freezing incomplete backend/event types in the provider-specific P0. It also defines T004C E0 over
+provider-task and Codebox-managed state while excluding byte comparisons of provider-owned
+credential storage.
+
+T004C remains dependency-blocked on T004B; the T004 parent remains Blocked until T004B and T004C
+are separately Accepted.
 
 ## Verified Pinned Cloud Surface
 
@@ -93,8 +115,9 @@ The official `rust-v0.145.0` source and local pinned CLI help establish:
 - `cloud list --json` emits the exact structured page recorded by the synthetic fixture.
 - `cloud diff` prints an untrusted raw unified diff.
 - `cloud apply` exists and is forbidden because it mutates a local working tree.
-- The upstream cloud implementation may append account/diagnostic metadata to cwd-relative
-  `error.log`; T004 must use the private trusted T002A working directory and never publish that file.
+- The upstream cloud implementation attempts to append account/diagnostic metadata to cwd-relative
+  `error.log`. T004A installs and revalidates a private `error.log/` directory sentinel, making the
+  exact pinned append a no-op; the private working directory is never published.
 
 The source-derived fixtures under `docs/fixtures/codex-0.145.0/cloud/` contain no live credential,
 account, repository, task, or user prompt.
@@ -114,27 +137,23 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-Decompose T004 before production code:
-
-1. Re-read TD §15.0, ADR-0002, accepted T002/T003 contracts, and the P0 CU inventory.
-2. Create the T004 parent task and split CU-AGT-P0-02 E2, CU-CLOUD-P0-01 E2,
-   CU-CLOUD-P0-02 E0, and CU-BKD-01 E3 into independently testable children.
-3. Write specifications and machine acceptance for each child, including full P14 launcher coverage,
-   durable submit intent/outcome recording, bounded list reconciliation, and the TD-exact P15
-   regression.
-4. Request the required fresh design review before marking any T004 child Ready.
-5. Select exactly one Ready child and generate its test skeletons before production edits.
+1. Generate every named SPEC-T004B lifecycle test skeleton before production edits.
+2. Implement the serialized Cloud task lifecycle, explicit unknown-submit recovery decisions,
+   browser-disconnect independence, and local-only cancellation semantics.
+3. Run focused/workspace gates and request a fresh Cursor Agent acceptance review before making
+   T004C Ready.
 
 Do not re-run T001/T010/T002 acceptance work unless their relevant files or behavior change.
 
 ## Validation Evidence
 
-The current working tree passed:
+The accepted T004A tree passed:
 
 ```text
 cargo fmt --all -- --check
 cargo test -p codebox-agent-codex --all-features
-  40 unit/property tests + 12 integration tests passed
+  59 unit/property tests + 12 integration tests passed
+  repeated 10 consecutive parallel package runs passed
 cargo clippy -p codebox-agent-codex --all-targets --all-features -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
@@ -145,5 +164,6 @@ git diff --check
 ```
 
 `cargo deny check` requires access to the user advisory-cache lock in this environment and was run
-with the approved permission. All other listed commands passed locally without a hosted result being
-claimed.
+with the approved permission. All listed commands passed locally. Hosted evidence must be checked
+against the pushed T004A commit; this handoff does not claim a run that had not completed when the
+acceptance record was written.

@@ -15,7 +15,10 @@ use crate::parser::{
     parse_status, parse_version,
 };
 use crate::scope::OwnedCredentialScopeLease;
-use crate::{CodexCommand, CodexInvocation, LoginBrokerError, VerificationCode};
+use crate::{
+    CodexCommand, CodexInvocation, LoginBrokerError, VerificationCode,
+    invocation::CloudProcessInvocation,
+};
 
 const SHORT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const INSTRUCTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -103,7 +106,7 @@ impl CliRuntime for ProcessRuntime {
 }
 
 #[derive(Clone)]
-struct CommandSpec {
+pub(crate) struct CommandSpec {
     executable: PathBuf,
     working_dir: PathBuf,
     codex_home: PathBuf,
@@ -112,6 +115,15 @@ struct CommandSpec {
 
 impl CommandSpec {
     fn from_invocation(invocation: &CodexInvocation<'_>) -> Self {
+        Self {
+            executable: invocation.executable().to_owned(),
+            working_dir: invocation.working_dir().to_owned(),
+            codex_home: invocation.codex_home().to_owned(),
+            args: invocation.args().iter().map(OsString::from).collect(),
+        }
+    }
+
+    pub(crate) fn from_cloud(invocation: &CloudProcessInvocation<'_, '_>) -> Self {
         Self {
             executable: invocation.executable().to_owned(),
             working_dir: invocation.working_dir().to_owned(),
@@ -514,13 +526,13 @@ fn run_short_command(
     }
 }
 
-fn spawn_bound_child(spec: &CommandSpec) -> Result<Child, LoginBrokerError> {
+pub(crate) fn spawn_bound_child(spec: &CommandSpec) -> Result<Child, LoginBrokerError> {
     spec.command()?
         .spawn()
         .map_err(|source| LoginBrokerError::Process { source })
 }
 
-fn terminate_group(child: &mut Child, grace: Duration) -> Result<ExitStatus, io::Error> {
+pub(crate) fn terminate_group(child: &mut Child, grace: Duration) -> Result<ExitStatus, io::Error> {
     signal_group(child.id(), libc::SIGTERM)?;
     let started_at = Instant::now();
     loop {
@@ -552,11 +564,25 @@ fn signal_group(pid: u32, signal: i32) -> Result<(), io::Error> {
     }
 }
 
-#[derive(Clone, Default)]
-struct SharedCapture(Arc<Mutex<BoundedCapture>>);
+#[derive(Clone)]
+pub(crate) struct SharedCapture(Arc<Mutex<BoundedCapture>>);
+
+impl Default for SharedCapture {
+    fn default() -> Self {
+        Self::with_limit(MAX_CAPTURE_BYTES)
+    }
+}
 
 impl SharedCapture {
-    fn push(&self, bytes: &[u8]) {
+    pub(crate) fn with_limit(limit: usize) -> Self {
+        Self(Arc::new(Mutex::new(BoundedCapture {
+            bytes: Vec::new(),
+            overflow: false,
+            limit,
+        })))
+    }
+
+    pub(crate) fn push(&self, bytes: &[u8]) {
         let mut capture = self
             .0
             .lock()
@@ -564,7 +590,7 @@ impl SharedCapture {
         capture.push(bytes);
     }
 
-    fn snapshot(&self) -> (Vec<u8>, bool) {
+    pub(crate) fn snapshot(&self) -> (Vec<u8>, bool) {
         let capture = self
             .0
             .lock()
@@ -573,15 +599,15 @@ impl SharedCapture {
     }
 }
 
-#[derive(Default)]
 struct BoundedCapture {
     bytes: Vec<u8>,
     overflow: bool,
+    limit: usize,
 }
 
 impl BoundedCapture {
     fn push(&mut self, bytes: &[u8]) {
-        let remaining = MAX_CAPTURE_BYTES.saturating_sub(self.bytes.len());
+        let remaining = self.limit.saturating_sub(self.bytes.len());
         self.bytes
             .extend_from_slice(&bytes[..bytes.len().min(remaining)]);
         if bytes.len() > remaining {
@@ -590,7 +616,10 @@ impl BoundedCapture {
     }
 }
 
-fn drain_stream<R>(mut stream: R, capture: SharedCapture) -> JoinHandle<Result<(), io::Error>>
+pub(crate) fn drain_stream<R>(
+    mut stream: R,
+    capture: SharedCapture,
+) -> JoinHandle<Result<(), io::Error>>
 where
     R: Read + Send + 'static,
 {
@@ -606,16 +635,18 @@ where
     })
 }
 
-fn finish_capture(
+pub(crate) fn finish_capture(
     status: Result<ExitStatus, io::Error>,
     stdout: &SharedCapture,
     stderr: &SharedCapture,
     stdout_thread: JoinHandle<Result<(), io::Error>>,
     stderr_thread: JoinHandle<Result<(), io::Error>>,
 ) -> Result<CapturedOutput, LoginBrokerError> {
+    let stdout_result = join_drain(stdout_thread);
+    let stderr_result = join_drain(stderr_thread);
     let status = status.map_err(|source| LoginBrokerError::Process { source })?;
-    join_drain(stdout_thread)?;
-    join_drain(stderr_thread)?;
+    stdout_result?;
+    stderr_result?;
     let (stdout, stdout_overflow) = stdout.snapshot();
     let (stderr, stderr_overflow) = stderr.snapshot();
     Ok(CapturedOutput {
@@ -644,7 +675,14 @@ pub(crate) mod test_support {
     pub(crate) fn drain_more_than_limit(
         bytes: Vec<u8>,
     ) -> Result<CapturedOutput, LoginBrokerError> {
-        let stdout_capture = SharedCapture::default();
+        drain_with_limit(bytes, MAX_CAPTURE_BYTES)
+    }
+
+    pub(crate) fn drain_with_limit(
+        bytes: Vec<u8>,
+        limit: usize,
+    ) -> Result<CapturedOutput, LoginBrokerError> {
+        let stdout_capture = SharedCapture::with_limit(limit);
         let stderr_capture = SharedCapture::default();
         let stdout_thread = drain_stream(std::io::Cursor::new(bytes), stdout_capture.clone());
         let stderr_thread = drain_stream(std::io::Cursor::new(Vec::new()), stderr_capture.clone());

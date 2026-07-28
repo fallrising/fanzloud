@@ -27,6 +27,10 @@ The original seed task mixed CU-AGT-P0-01 E0, CU-AGT-P0-02 E2, and CU-BKD-01 E3.
 those independently testable atomicity models to be split. CU-AGT-P0-02 and CU-BKD-01 move to the
 T004 integration parent, which must be decomposed before implementation. `[NEW-SPEC]`
 
+ADR-0003 supersedes the final ownership sentence for the P0 path: CU-AGT-P0-02 moves to T004B,
+while generic CU-BKD-01 remains in T180 after its canonical T020 event dependency. T003's accepted
+implementation and CU-AGT-P0-01 scope are unchanged.
+
 # Pinned Official Surface
 
 Local `--help` inspection and the official `rust-v0.145.0` source establish:

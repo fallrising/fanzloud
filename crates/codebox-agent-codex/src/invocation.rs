@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::CloudInvocation;
+
 /// One of the only Codex CLI operations authorized by the T002 boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CodexCommand {
@@ -94,5 +96,45 @@ impl<'scope> CodexInvocation<'scope> {
     /// Contract: `CU-AUTH-P0-02`.
     pub const fn clears_environment(&self) -> bool {
         true
+    }
+}
+
+/// Revalidated trusted paths plus one non-extensible T003 Cloud argv policy.
+pub(crate) struct CloudProcessInvocation<'scope, 'command> {
+    executable: &'scope Path,
+    working_dir: &'scope Path,
+    codex_home: &'scope Path,
+    command: &'command CloudInvocation,
+}
+
+impl<'scope, 'command> CloudProcessInvocation<'scope, 'command> {
+    pub(crate) fn new(
+        executable: &'scope Path,
+        working_dir: &'scope Path,
+        codex_home: &'scope Path,
+        command: &'command CloudInvocation,
+    ) -> Self {
+        Self {
+            executable,
+            working_dir,
+            codex_home,
+            command,
+        }
+    }
+
+    pub(crate) fn executable(&self) -> &Path {
+        self.executable
+    }
+
+    pub(crate) fn working_dir(&self) -> &Path {
+        self.working_dir
+    }
+
+    pub(crate) fn codex_home(&self) -> &Path {
+        self.codex_home
+    }
+
+    pub(crate) fn args(&self) -> &[String] {
+        self.command.args()
     }
 }

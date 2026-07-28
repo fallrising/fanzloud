@@ -7,9 +7,10 @@ use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
+use crate::invocation::CloudProcessInvocation;
 use crate::{
-    CodexCommand, CodexInvocation, CredentialDirectory, CredentialPath, CredentialScopeError,
-    DirectoryViolation, ExecutableViolation, LeaseViolation,
+    CloudInvocation, CodexCommand, CodexInvocation, CredentialDirectory, CredentialPath,
+    CredentialScopeError, DirectoryViolation, ExecutableViolation, LeaseViolation,
 };
 
 const LEASE_FILE_NAME: &str = "login.lock";
@@ -129,12 +130,7 @@ impl CredentialScope {
 
         #[cfg(target_os = "linux")]
         {
-            self.revalidate()?;
-            let lease_path = self.state_dir.join(LEASE_FILE_NAME);
-            let file = open_lease(&lease_path)?;
-            validate_lease(&file, self.runner_uid)?;
-            acquire_lock(&file)?;
-
+            let file = self.acquire_lock_file()?;
             Ok(CredentialScopeLease {
                 scope: self,
                 _lock: file,
@@ -150,16 +146,26 @@ impl CredentialScope {
 
         #[cfg(target_os = "linux")]
         {
-            let borrowed = self.try_acquire()?;
+            let file = self.acquire_lock_file()?;
             Ok(OwnedCredentialScopeLease {
                 executable: self.executable.clone(),
                 codex_home: self.codex_home.clone(),
                 state_dir: self.state_dir.clone(),
                 working_dir: self.working_dir.clone(),
                 runner_uid: self.runner_uid,
-                _lock: borrowed._lock,
+                _lock: file,
             })
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn acquire_lock_file(&self) -> Result<File, CredentialScopeError> {
+        self.revalidate()?;
+        let lease_path = self.state_dir.join(LEASE_FILE_NAME);
+        let file = open_lease(&lease_path)?;
+        validate_lease(&file, self.runner_uid)?;
+        acquire_lock(&file)?;
+        Ok(file)
     }
 
     #[cfg(target_os = "linux")]
@@ -204,6 +210,20 @@ pub(crate) struct OwnedCredentialScopeLease {
     _lock: File,
 }
 
+impl Drop for CredentialScopeLease<'_> {
+    fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        release_lock(&self._lock);
+    }
+}
+
+impl Drop for OwnedCredentialScopeLease {
+    fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        release_lock(&self._lock);
+    }
+}
+
 impl OwnedCredentialScopeLease {
     pub(crate) fn state_dir(&self) -> &Path {
         &self.state_dir
@@ -211,6 +231,32 @@ impl OwnedCredentialScopeLease {
 
     pub(crate) fn runner_uid(&self) -> u32 {
         self.runner_uid
+    }
+
+    pub(crate) fn working_dir(&self) -> &Path {
+        &self.working_dir
+    }
+
+    pub(crate) fn cloud_invocation<'lease, 'command>(
+        &'lease self,
+        command: &'command CloudInvocation,
+    ) -> Result<CloudProcessInvocation<'lease, 'command>, CredentialScopeError> {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = command;
+            Err(CredentialScopeError::UnsupportedPlatform)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            revalidate_owned(self)?;
+            Ok(CloudProcessInvocation::new(
+                &self.executable,
+                &self.working_dir,
+                &self.codex_home,
+                command,
+            ))
+        }
     }
 
     pub(crate) fn invocation(
@@ -545,6 +591,13 @@ fn acquire_lock(file: &File) -> Result<(), CredentialScopeError> {
     } else {
         Err(CredentialScopeError::LeaseUnavailable { source })
     }
+}
+
+#[cfg(target_os = "linux")]
+fn release_lock(file: &File) {
+    // SAFETY: the descriptor remains valid until this `Drop` returns. Explicit unlock prevents a
+    // concurrently forked child from extending the lease through its inherited pre-exec copy.
+    let _ = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
 }
 
 #[cfg(all(test, target_os = "linux"))]

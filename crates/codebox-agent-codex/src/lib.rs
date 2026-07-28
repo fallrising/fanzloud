@@ -9,6 +9,9 @@
 
 mod broker;
 mod cloud;
+mod cloud_runner;
+mod cloud_runner_types;
+mod cloud_submit_ledger;
 mod error;
 mod invocation;
 mod ledger;
@@ -18,6 +21,8 @@ mod parser;
 mod runtime;
 mod scope;
 
+#[cfg(test)]
+mod cloud_runner_tests;
 #[cfg(test)]
 mod cloud_tests;
 #[cfg(test)]
@@ -29,6 +34,11 @@ pub use cloud::{
     CloudErrorCategory, CloudField, CloudInvocation, CloudPrompt, CloudTaskId, CloudTaskListPage,
     CloudTaskStatus, CloudTaskSummary, CloudTaskUrl, decode_cloud_diff, decode_cloud_exec,
     decode_cloud_list, decode_cloud_status, decode_cloud_version,
+};
+pub use cloud_runner::CloudTaskRunner;
+pub use cloud_runner_types::{
+    CloudCancellation, CloudReconciliation, CloudRunnerConfig, CloudRunnerError,
+    CloudRunnerErrorCategory, CloudSubmission, CloudSubmitOperationId, CloudSubmitRequest,
 };
 pub use error::{
     CredentialDirectory, CredentialPath, CredentialScopeError, DirectoryViolation,

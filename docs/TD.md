@@ -1616,8 +1616,11 @@ flowchart TD
     T002B --> T002[T002 Login Broker Parent]
     T001 --> T003[T003 Codex Cloud Contract Adapter]
     T010 --> T003
-    T002 --> T004[T004 Codex Cloud Task Orchestrator]
-    T003 --> T004
+    T002 --> T004A[T004A Trusted Cloud Runner]
+    T003 --> T004A
+    T004A --> T004B[T004B Cloud Task Lifecycle]
+    T004B --> T004C[T004C Cloud Diff Retrieval]
+    T004C --> T004[T004 Orchestrator Parent]
     T004 --> T005[T005 P0 Session API and Stream]
     T005 --> T006[T006 Minimal Operator Web]
     T006 --> T007[T007 P0 Subscription E2E]
@@ -1630,7 +1633,10 @@ flowchart TD
 | T002B | Version-pinned Codex device-login lifecycle | CU-AUTH-P0-01 | T002A | Fixture parser, lifecycle, process supervision, crash reconciliation, and redaction tests |
 | T002 | Accepted login-broker parent | CU-AUTH-P0-01, CU-AUTH-P0-02 | T002A,T002B | Both child acceptances plus combined workspace and P14 security gates |
 | T003 | Version-pinned Codex Cloud fixed-command and output decoder | CU-AGT-P0-01 | T001,T010 | Source-derived fixtures, malformed output, argv injection, version, task-status, list, diff-bound, and redaction tests |
-| T004 | Codex Cloud lifecycle, diff, and backend integration parent for an administrator-configured environment | CU-AGT-P0-02, CU-CLOUD-P0-01, CU-CLOUD-P0-02, CU-BKD-01 | T002,T003 | Decomposed E2 lifecycle, E0 diff, and E3 backend-conformance child acceptances plus no-local-execution gates |
+| T004A | Trusted fixed Codex Cloud submit/status/list runner | CU-CLOUD-P0-01 | T002,T003 | Durable E2 submit ledger, bounded list reconciliation, launcher faults, full P14, and exact P15 |
+| T004B | Codex Cloud task lifecycle and local cancellation policy | CU-AGT-P0-02 | T004A | Status/lifecycle, explicit recovery, disconnect, local cancel, ordering, and no-automatic-retry tests |
+| T004C | Provider-managed task diff retrieval | CU-CLOUD-P0-02 | T004A,T004B | E0 state snapshots, bounded drain, redaction, diagnostic-write prevention, and no-apply tests |
+| T004 | Accepted provider-specific Codex Cloud orchestrator coordination parent | CU-AGT-P0-02, CU-CLOUD-P0-01, CU-CLOUD-P0-02 | T004A,T004B,T004C | All child acceptances plus combined no-local-execution and workspace gates; ADR-0003 keeps CU-BKD-01 in T180 |
 | T005 | P0 login/session HTTP API and replayable live stream | CU-SES-P0-01, CU-API-P0-01, CU-API-P0-02 | T004 | HTTP, ordering, reconnect, cancel, cleanup, and redaction contract tests |
 | T006 | Private single-page operator flow | CU-WEB-P0-01 | T005 | Browser login-status, prompt, streaming, cancel, diff, refresh, and no-secret tests |
 | T007 | Deterministic and live subscription end-to-end acceptance | All P0 CUs | T006 | Fake-Codex CI E2E plus one operator-authenticated live smoke |
@@ -2004,7 +2010,13 @@ T001 P0 Subscription Boundary
   │   T002 Login Broker Parent
   └→ T003 Codex Cloud CLI Adapter
         ↓
-T004 Codex Cloud Task Orchestrator
+T004A Trusted Cloud Runner
+  ↓
+T004B Cloud Task Lifecycle
+  ↓
+T004C Cloud Diff Retrieval
+  ↓
+T004 Orchestrator Parent
   ↓
 T005 Session API and Stream
   ↓
