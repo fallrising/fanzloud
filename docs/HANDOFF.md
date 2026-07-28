@@ -1,6 +1,6 @@
 # Development Handoff
 
-Date: 2026-07-27
+Date: 2026-07-28
 
 ## Current Goal
 
@@ -13,20 +13,11 @@ code beside `CODEX_HOME`.
 
 Branch: `main`
 
-`HEAD` and `origin/main` currently point to:
+T001, T010, T002A, T002B, T002, and T003 are Accepted. T003 is the latest completed production task.
+Inspect `git status`, the latest commit, and hosted CI before continuing; this handoff does not claim
+a hosted result for T003.
 
-```text
-4a06ad2 docs: record T002 CI evidence
-```
-
-The working tree contains the coherent, uncommitted T001/T010 acceptance updates, T002A/T002B/T002
-implementation and acceptance, and T003 Ready design described below. No commit or push was made in
-this session. Preserve these changes and inspect `git status` before editing.
-
-No hosted CI run exists for the current uncommitted implementation. Earlier hosted runs remain
-historical evidence only.
-
-## Accepted in This Working Tree
+## Accepted Baseline
 
 ### T001 and T010
 
@@ -68,22 +59,25 @@ behavior or leave a runnable child.
 - Both children and the combined workspace/P14 gates pass.
 - A separate fresh composition review returned `ACCEPTED`.
 
+### T003 — pinned Codex Cloud contract adapter
+
+- Added bounded environment, branch, prompt, task ID/URL, cursor, list-page, status, and raw-diff
+  values with typed redacted errors and debug output.
+- Added non-extensible version, Cloud exec/status/list/diff argv; there is no executable, process,
+  credential, repository, retry, `cloud apply`, or diff-application surface.
+- Added exact completed-capture decoders for the source-derived `0.145.0` fixtures, including strict
+  schema/URL/exit mapping, RFC3339 and numeric bounds, missing-exit handling, and output limits.
+- All 17 named T003 tests pass, including property-based chunk partitioning and narrow P14/P15
+  regressions.
+- A fresh, read-only Cursor Agent acceptance review returned `ACCEPTED` with no blocker. Claude was
+  unavailable at its usage limit; the project owner explicitly authorized the replacement reviewer.
+
 ## Current Ready Task
 
-Exactly one task is Ready:
+No production implementation task is Ready. The next documentation task is to decompose the T004
+integration parent into separate atomicity-specific children before writing T004 code.
 
-```text
-T003 — pinned Codex Cloud contract adapter
-CU-AGT-P0-01
-archetypes D+F
-atomicity E0
-```
-
-T003 is intentionally side-effect free. It owns typed values, fixed argv, and decoders for completed
-bounded captures. It does not start a process, read credentials, submit/poll a task, reconcile an
-unknown submission, implement `AgentBackend`, or apply a diff.
-
-The original T003 seed mixed E0, E2, and E3 CUs. TD §9.3 required correction:
+The original T003 seed mixed E0, E2, and E3 CUs. TD §9.3 corrected the boundary:
 
 - T003 retains CU-AGT-P0-01 E0.
 - CU-AGT-P0-02 E2 and CU-BKD-01 E3 move to the future T004 parent.
@@ -115,23 +109,21 @@ Claude reviewed four T003 design revisions. The reviews found and removed:
 - missing property-based chunk-partition and missing-exit test skeletons; and
 - unclear P14/P15 ownership.
 
-The fourth fresh review returned `DESIGN ACCEPTED` with no blocker.
+The fourth fresh design review returned `DESIGN ACCEPTED` with no blocker. The implemented contract
+subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-Work only on T003:
+Decompose T004 before production code:
 
-1. Read `docs/tasks/T003.task.md` and `docs/specs/SPEC-T003-codex-cloud-contract.md`.
-2. Generate every named T003 test skeleton before production edits.
-3. Implement the smallest E0 addition in `codebox-agent-codex`:
-   - bounded strong values and redacted errors/debug;
-   - non-extensible version/exec/status/list/diff argv;
-   - exact completed-capture decoders;
-   - no process, credential, retry, apply, or repository-execution surface.
-4. Run focused tests/Clippy, then all workspace gates and `cargo deny check`.
-5. Update rustdoc, specification evidence, task status, traceability, and request a fresh
-   document-first acceptance review.
-6. Only after T003 is Accepted, decompose the mixed-atomicity T004 parent before writing T004 code.
+1. Re-read TD §15.0, ADR-0002, accepted T002/T003 contracts, and the P0 CU inventory.
+2. Create the T004 parent task and split CU-AGT-P0-02 E2, CU-CLOUD-P0-01 E2,
+   CU-CLOUD-P0-02 E0, and CU-BKD-01 E3 into independently testable children.
+3. Write specifications and machine acceptance for each child, including full P14 launcher coverage,
+   durable submit intent/outcome recording, bounded list reconciliation, and the TD-exact P15
+   regression.
+4. Request the required fresh design review before marking any T004 child Ready.
+5. Select exactly one Ready child and generate its test skeletons before production edits.
 
 Do not re-run T001/T010/T002 acceptance work unless their relevant files or behavior change.
 
@@ -142,7 +134,7 @@ The current working tree passed:
 ```text
 cargo fmt --all -- --check
 cargo test -p codebox-agent-codex --all-features
-  23 unit tests + 12 integration tests passed
+  40 unit/property tests + 12 integration tests passed
 cargo clippy -p codebox-agent-codex --all-targets --all-features -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features

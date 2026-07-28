@@ -1,7 +1,7 @@
 ---
 id: SPEC-T003
 subject: T003 pinned Codex Cloud contract adapter
-status: ready
+status: verified
 contract_units: [CU-AGT-P0-01]
 archetypes: [D, F]
 atomicity: E0
@@ -215,8 +215,8 @@ repair malformed provider output. `[NEW-SPEC]`
 
 # Acceptance
 
-T003 becomes Ready only after this new technical design receives the required fresh Claude review
-with no blocking gap.
+T003 is Accepted in [`ACCEPT-T003`](../acceptance/T003.acceptance.md). The report records all local
+machine evidence and the fresh, read-only implementation review, which found no blocking gap.
 
 The T003 P14/P15 tests are narrow proofs that this E0 policy exposes neither repository execution
 nor retry authority. T004 still owes P14 coverage over its real process launcher and the TD-exact
@@ -237,3 +237,22 @@ missing-exit and positional-injection traceability.
 The fourth fresh, read-only review returned `DESIGN ACCEPTED` with no blocker after independently
 checking the official `rust-v0.145.0` source, every fixture, CU/atomicity split, D/F questions,
 mechanical test mapping, bounds, redaction, argv policy, and P14/P15 ownership.
+
+# Implementation Evidence
+
+On 2026-07-28, the implementation passed:
+
+- `cargo fmt --all -- --check`
+- `cargo test -p codebox-agent-codex --all-features` — 40 unit/property tests and 12 integration
+  tests passed.
+- `cargo clippy -p codebox-agent-codex --all-targets --all-features -- -D warnings`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --workspace --all-targets --all-features`
+- `cargo build --workspace --bins --all-features`
+- `cargo deny check` — advisories, bans, licenses, and sources all `ok`.
+- `git diff --check`
+
+The implementation is limited to `crates/codebox-agent-codex`: one cohesive Cloud contract module,
+its generated clause-named test module, public rustdoc projection, the shared accepted CLI version
+fixture constant, and a test-only property-testing dependency. It creates no process, filesystem,
+network, credential, repository, side-effect ledger, retry, or diff-application surface.

@@ -1,6 +1,7 @@
 use crate::{LoginBrokerError, VerificationCode};
 
 pub(crate) const MAX_CAPTURE_BYTES: usize = 16 * 1024;
+pub(crate) const PINNED_CODEX_VERSION_STDOUT: &str = "codex-cli 0.145.0\n";
 const DEVICE_CODE_PLACEHOLDER: &str = "A1B2-3456C";
 const DEVICE_PROMPT_FIXTURE: &str =
     include_str!("../../../docs/fixtures/codex-0.145.0/login/device-login.stdout");
@@ -29,7 +30,7 @@ pub(crate) struct CapturedOutput {
 pub(crate) fn parse_version(output: &CapturedOutput) -> Result<(), LoginBrokerError> {
     reject_overflow(output)?;
     if output.exit_code != Some(0)
-        || normalize_plain_stream(&output.stdout)? != "codex-cli 0.145.0\n"
+        || normalize_plain_stream(&output.stdout)? != PINNED_CODEX_VERSION_STDOUT
         || !output.stderr.is_empty()
     {
         return Err(LoginBrokerError::VersionMismatch);
