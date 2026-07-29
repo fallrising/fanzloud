@@ -1360,6 +1360,13 @@ npm run lint
 npm test
 ```
 
+The dependency-free P0 T006 page is the narrow exception: it has no TypeScript, package-manager
+dependency, or third-party linter, so its official web gate is
+`node --test apps/control-plane/web/p0-client.test.mjs` under the exact Node version pinned in
+SPEC-T006 and hosted CI. That suite must import the production modules, inspect the DOM adapter for
+forbidden sinks/authority, and exercise the controller contract. The npm gates remain required for
+the later packaged P1 web application.
+
 Additional required gates:
 
 1. Every public CU method contains a contract ID in rustdoc.
@@ -1570,7 +1577,7 @@ This is the initial P1 contract inventory. The LLM MAY add CUs when a public bou
 | CU-SES-P0-01 | P0 in-process session lifecycle | session-runtime | E | E1 | INV-004, INV-012 |
 | CU-API-P0-01 | P0 login and session HTTP API | control-plane | F | Per endpoint | INV-007, INV-010 |
 | CU-API-P0-02 | P0 live event stream | control-plane | D+F | E0 | Session-local ordering |
-| CU-WEB-P0-01 | Private operator browser flow | web | F | E0 | INV-007, INV-012 |
+| CU-WEB-P0-01 | Private operator browser flow | web | F | Per action; delegated mutations retain accepted lower atomicity | INV-007, INV-012 |
 | CU-FS-00 | `WorkspacePath::try_new` | domain/protocol | A | E0 | Path-shape type invariant |
 | CU-PROTO-01 | Session reducer `apply` | domain | A | E0 | INV-003, INV-004 |
 | CU-PROTO-02 | Public event serde round trip | protocol-web | A | E0 | Versioned public protocol |
