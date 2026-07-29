@@ -1318,7 +1318,12 @@ export function createP0Controller(dependencies) {
     }
     socket = next;
     next.onopen = () => {
-      if (disposed || myGeneration !== generation || socket !== next) {
+      if (
+        disposed ||
+        myGeneration !== generation ||
+        socket !== next ||
+        streamState.phase === "failed"
+      ) {
         return;
       }
       try {
@@ -1335,12 +1340,22 @@ export function createP0Controller(dependencies) {
       }
     };
     next.onmessage = (event) => {
-      if (!disposed && myGeneration === generation && socket === next) {
+      if (
+        !disposed &&
+        myGeneration === generation &&
+        socket === next &&
+        streamState.phase !== "failed"
+      ) {
         handleFrame(event.data, streamState);
       }
     };
     next.onerror = () => {
-      if (!disposed && myGeneration === generation && socket === next) {
+      if (
+        !disposed &&
+        myGeneration === generation &&
+        socket === next &&
+        streamState.phase !== "failed"
+      ) {
         state.error = MESSAGES.stream_waiting;
         emit();
       }

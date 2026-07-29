@@ -1010,8 +1010,12 @@ test("p0_web_stream_replays_and_reconnects_from_validated_cursor", async () => {
     }),
   );
   terminalLatchSocket.message(frame({ type: "event", envelope: envelope(1) }));
+  const sendsAfterProtocolFailure = terminalLatchSocket.sent.length;
+  terminalLatchSocket.open();
+  terminalLatchSocket.onerror?.();
   assert.deepEqual(terminalLatch.state(), stateAfterProtocolFailure);
   assert.equal(terminalLatch.storage.getItem(CURSOR_KEY), cursorAfterProtocolFailure);
+  assert.equal(terminalLatchSocket.sent.length, sendsAfterProtocolFailure);
   assert.equal(terminalLatch.state().connection, "connecting");
   assert.equal(terminalLatch.state().error, FIXED.protocol);
   assert.deepEqual(terminalLatchSocket.closeCalls, [{ code: 1008, reason: "" }]);
