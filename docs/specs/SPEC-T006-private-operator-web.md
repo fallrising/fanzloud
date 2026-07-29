@@ -457,10 +457,11 @@ placeholder/skipped/todo tests do not satisfy final acceptance.
 | Command or check | Result | Evidence URI or hash |
 |---|---|---|
 | Fresh repaired-tree design review | `DESIGN ACCEPTED` | fresh-context Codex subagent |
-| Skeleton compile/run before production | Pending | T006 skeleton commit |
-| Focused Rust/Node tests | Pending | ACCEPT-T006 |
-| Workspace gates | Pending | ACCEPT-T006 |
-| Fresh acceptance review | Pending | ACCEPT-T006 |
+| Skeleton compile/run before production | Passed | `63ae330` |
+| Focused Rust/Node tests | Passed: 2 Rust + 10 Node | `ACCEPT-T006` |
+| Workspace gates | Passed: 178 Rust tests | `d66d79d`; `ACCEPT-T006` |
+| Fresh acceptance review | `T006 ACCEPTED` | `d66d79d`; `ACCEPT-T006` |
+| Hosted CI | Passed | [run 30423184446](https://github.com/fallrising/fanzloud/actions/runs/30423184446) |
 
 # Traceability
 

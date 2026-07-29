@@ -14,9 +14,9 @@ code beside `CODEX_HOME`.
 Branch: `main`
 
 T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, T004C, the T004 coordination
-parent, T005A, T005B, T005C, and the T005 coordination parent are Accepted. T005C is the latest
-completed production task; `ACCEPT-T005C` records its implementation, rejection/repair, and final
-review evidence. `ACCEPT-T005` records the child-union composition acceptance.
+parent, T005A, T005B, T005C, the T005 coordination parent, and T006 are Accepted. T006 is the
+latest completed production task; `ACCEPT-T006` records its design/test-first history,
+implementation repair rounds, final fresh-context review, local gates, and hosted evidence.
 
 ## Accepted Baseline
 
@@ -213,6 +213,24 @@ review returned `COMPOSITION ACCEPTED`, and the parent is Accepted.
 - Cursor and Grok exceeded the owner's 80-second review windows. The authorized fresh-context
   Codex fallback returned `COMPOSITION ACCEPTED`.
 
+### T006 — private same-origin operator page
+
+- Added compile-time embedded HTML, CSS, and ESM assets with exact MIME, no-store/nosniff,
+  frame/referrer/permissions isolation, and an administrator-derived same-origin WSS CSP source.
+- Added a dependency-free browser controller for bootstrap, device login, explicit prompt/cancel,
+  snapshot refresh, replay/live reconnect, bounded text diff, and logout over only the accepted
+  fixed T005 routes.
+- Exact response/status/frame validation, snapshot semantics, byte bounds, ambiguous-mutation
+  refresh behavior, generation/disposal fences, terminal stream latching, and pre-dispatch
+  volatile clearing fail closed without retrying mutations.
+- The browser exposes no provider/repository/executable/argv/path/environment/branch/recovery/apply
+  authority and never treats untrusted values as HTML.
+- All 12 exact tests pass: two Rust route/security tests and ten Node controller/DOM tests. The
+  Node suite and three Rust concurrency/reconnect partitions each passed 20 consecutive runs; the
+  workspace reports 178 Rust tests.
+- Fresh final review returned `T006 ACCEPTED`; hosted CI run 30423184446 passed, including the
+  pinned Node 24.18.0 step.
+
 ## Verified Pinned Cloud Surface
 
 The official `rust-v0.145.0` source and local pinned CLI help establish:
@@ -244,11 +262,11 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Resume the new SPEC-T006 fresh read-only design review. Cursor and Grok each reached the owner's
-   80-second limit without a verdict; the authorized Codex fallback was interrupted when the owner
-   paused work, so no design verdict has been recorded.
-2. Implement and accept the dependency-free private operator page, then materialize T007 only
-   after T006 is Accepted.
+1. Materialize T007 spec-first from TD §§1.7 and 15.0.
+2. Complete deterministic fake-Codex P0 subscription E2E acceptance across the accepted T002–T006
+   surfaces.
+3. Record the operator-authenticated live smoke only when the required credentials/environment are
+   genuinely available; otherwise record it explicitly as gated and unavailable, never as passed.
 
 ADR-0004 and the complete T005 decomposition received fresh Cursor Agent design acceptance after
 three rejected drafts repaired durability/authentication, state-transition, cancel/shutdown,
@@ -265,24 +283,25 @@ Do not re-run T001/T010/T002 acceptance work unless their relevant files or beha
 
 ## Validation Evidence
 
-The accepted T005C tree passed:
+The accepted T006 tree passed:
 
 ```text
+node --test --test-isolation=none apps/control-plane/web/p0-client.test.mjs
+  10 dependency-free browser-controller/DOM tests passed
 cargo fmt --all -- --check
 cargo test -p codebox-control-plane --all-features
-  32 HTTP/WebSocket/concurrency/security tests passed
-  T005C suite repeated 10 consecutive external runs
-  tests 8–11 repeated 10 times internally
+  36 HTTP/WebSocket/web/concurrency/security tests passed
+  focused T006 Rust route/security tests: 2 passed
 cargo clippy -p codebox-control-plane --all-targets --all-features -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
-  174 tests passed
+  178 tests passed
 cargo build --workspace --bins --all-features
 cargo deny check
   advisories ok, bans ok, licenses ok, sources ok
 git diff --check
 ```
 
-`cargo deny check` requires access to the user advisory-cache lock in this environment and was run
-with the approved permission. All listed commands passed locally. Hosted evidence must be checked
-against the pushed T005C acceptance commit.
+The Node suite and the HTTP idempotency, WebSocket reconnect, and WebSocket chunk/reconnect
+partitions each passed 20 consecutive runs. All listed commands passed locally. Hosted CI run
+30423184446 passed the exact T006 code tree.
