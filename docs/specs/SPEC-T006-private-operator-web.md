@@ -235,6 +235,18 @@ Adopting snapshot high-water means prior event detail is intentionally unavailab
 synthesize or display events. A new authenticated tab without a valid record therefore begins live
 delivery at the snapshot high-water instead of requesting an already-evicted zero cursor.
 
+Snapshot state and current-turn projection must also match the exact reachable T005A combinations:
+
+| Session state | Exact accepted current-turn projection |
+|---|---|
+| `ready` | absent; `canceled_before_cloud_start`; or `cloud` with `failed_before_submit`, `ready`, `applied`, `provider_error`, `canceled_locally`, or `abandoned_unknown` lifecycle |
+| `running` | `queued`; `starting`; or `cloud` with `submitting` or `pending` lifecycle |
+| `recovery_required` | `cloud` with `outcome_unknown` lifecycle |
+| `monitoring_degraded` | `monitoring_degraded`, with its top-level operation ID exactly equal to the nested last-known `pending` operation ID |
+| `stopped` | absent; `canceled_before_cloud_start`; `stopped_before_cloud_start`; `stopped_after_lower_failure`; any valid `cloud` lifecycle; or a valid operation-matched `monitoring_degraded` projection |
+
+Every other independently well-shaped but unreachable state/projection combination is invalid.
+
 # Streaming Semantics
 
 The controller sends exactly the accepted T005C subscribe frame after socket open. One connection
@@ -418,9 +430,11 @@ deterministic action/response/frame model across partitioned schedules and asser
 equals the explicit action log, including timeout/abort/late-response schedules and inherited
 per-action atomicity/ambiguity dispositions. Its schedule matrix covers every explicit mutation
 kind; accepted success, fixed error, redirect/network/timeout, concurrent-gesture, refresh,
-disposal, and late-success outcomes; legal and invalid frame ordering; and stale generation
-callbacks. Each schedule records the admitted explicit action and requires exactly zero or one
-matching mutation dispatch with no automatic duplicate or cross-action mutation.
+disposal during both the initial mutation and its automatic refresh, and late-success outcomes;
+legal and invalid frame ordering; the complete impossible-snapshot state/projection matrix; and
+stale generation callbacks. Each schedule records the admitted explicit action and requires
+exactly zero or one matching mutation dispatch with no automatic duplicate or cross-action
+mutation.
 
 The official dependency-free command is:
 
