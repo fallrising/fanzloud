@@ -43,7 +43,6 @@ const EVENT_TYPES = new Set([
   "runtime_stopped",
 ]);
 const CLOUD_STATES = new Set([
-  "submitting",
   "failed_before_submit",
   "outcome_unknown",
   "pending",
@@ -373,8 +372,7 @@ function validSnapshotCombination(state, currentTurn) {
         projection.phase === "queued" ||
         projection.phase === "starting" ||
         (projection.phase === "cloud" &&
-          (projection.lifecycle.state === "submitting" ||
-            projection.lifecycle.state === "pending"))
+          projection.lifecycle.state === "pending")
       );
     case "recovery_required":
       return (
@@ -964,7 +962,6 @@ export function createP0Controller(dependencies) {
     }
     state.busy = true;
     state.error = "";
-    emit();
     return true;
   }
 
@@ -1013,6 +1010,7 @@ export function createP0Controller(dependencies) {
     cancelReconnect();
     closeSocket("none");
     clearVolatileForRead();
+    emit();
     const stored = readStored();
     const sessionResult = await request(
       ROUTES.session,
@@ -1367,6 +1365,9 @@ export function createP0Controller(dependencies) {
       endHttp();
       return false;
     }
+    state.device = null;
+    state.diff = "";
+    emit();
     const result = await request(
       ROUTES.bootstrap,
       { method: "POST", headers: { Authorization: bearer } },
@@ -1401,6 +1402,7 @@ export function createP0Controller(dependencies) {
     const myGeneration = generation;
     state.diff = "";
     state.device = null;
+    emit();
     const key = validateIdempotencyKey();
     if (!key) {
       state.error = MESSAGES.request_failed;
@@ -1530,6 +1532,7 @@ export function createP0Controller(dependencies) {
     }
     const myGeneration = generation;
     state.diff = "";
+    emit();
     const result = await request(
       ROUTES.diff,
       { method: "GET" },
@@ -1569,6 +1572,7 @@ export function createP0Controller(dependencies) {
     const myGeneration = generation;
     state.diff = "";
     state.device = null;
+    emit();
     const key = validateIdempotencyKey();
     if (!key) {
       state.error = MESSAGES.request_failed;

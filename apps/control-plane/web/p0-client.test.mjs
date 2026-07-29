@@ -636,8 +636,18 @@ test("p0_web_login_status_and_device_actions_use_exact_api_contract", async () =
   assert.equal(requestHeaders(start).has("content-type"), false);
   assert.equal(harness.state().device.verificationCode, "AB12-CDE34");
 
-  harness.queue.push(jsonResponse({ state: "logged_out" }));
-  assert.equal(await harness.controller.cancelDeviceLogin(), true);
+  let resolveCancel;
+  harness.queue.push(
+    () =>
+      new Promise((resolve) => {
+        resolveCancel = resolve;
+      }),
+  );
+  const pendingCancel = harness.controller.cancelDeviceLogin();
+  assert.equal(harness.state().busy, true);
+  assert.equal(harness.state().device, null);
+  resolveCancel(jsonResponse({ state: "logged_out" }));
+  assert.equal(await pendingCancel, true);
   const cancel = harness.requests.at(-1);
   assertMutationRequest(cancel, ROUTES.loginCancel);
   assert.equal(harness.state().device, null);
@@ -843,7 +853,6 @@ test("p0_web_stream_replays_and_reconnects_from_validated_cursor", async () => {
       return (
         name === "queued" ||
         name === "starting" ||
-        name === "cloud_submitting" ||
         name === "cloud_pending"
       );
     }
@@ -859,7 +868,7 @@ test("p0_web_stream_replays_and_reconnects_from_validated_cursor", async () => {
         name === "stopped_before" ||
         name === "stopped_after" ||
         name === "degraded" ||
-        name.startsWith("cloud_"))
+        (name.startsWith("cloud_") && name !== "cloud_submitting"))
     );
   }
 
@@ -919,6 +928,31 @@ test("p0_web_stream_replays_and_reconnects_from_validated_cursor", async () => {
   );
   assert.deepEqual(impossibleSocket.closeCalls.at(-1), { code: 1008, reason: "" });
   assert.equal(impossibleSnapshot.state().error, FIXED.protocol);
+
+  const impossibleEvent = makeHarness();
+  const impossibleEventSocket = await load(impossibleEvent);
+  impossibleEventSocket.open();
+  impossibleEventSocket.message(
+    frame({
+      type: "replay_begin",
+      session_id: SESSION_ID,
+      after_seq: 0,
+      high_water_seq: 1,
+    }),
+  );
+  impossibleEventSocket.message(
+    frame({
+      type: "event",
+      envelope: envelope(1, "lifecycle_changed", {
+        payload: {
+          type: "lifecycle_changed",
+          lifecycle: cloudLifecycle("submitting"),
+        },
+      }),
+    }),
+  );
+  assert.deepEqual(impossibleEventSocket.closeCalls.at(-1), { code: 1008, reason: "" });
+  assert.equal(impossibleEvent.state().error, FIXED.protocol);
 
   for (const invalid of [
     new Uint8Array([1]),
@@ -980,6 +1014,22 @@ test("p0_web_diff_is_bounded_text_and_never_html", async () => {
   harness.queue.push(new Response(canary, { headers: { "content-type": DIFF_TYPE } }));
   assert.equal(await harness.controller.showDiff(), true);
   assert.equal(harness.state().diff, canary);
+
+  let resolveReplacement;
+  harness.queue.push(
+    () =>
+      new Promise((resolve) => {
+        resolveReplacement = resolve;
+      }),
+  );
+  const pendingReplacement = harness.controller.showDiff();
+  assert.equal(harness.state().busy, true);
+  assert.equal(harness.state().diff, "");
+  resolveReplacement(
+    new Response("replacement", { headers: { "content-type": DIFF_TYPE } }),
+  );
+  assert.equal(await pendingReplacement, true);
+  assert.equal(harness.state().diff, "replacement");
 
   const exact = bytesResponse([
     new Uint8Array(DIFF_LIMIT / 2).fill(97),
@@ -1607,6 +1657,59 @@ test("p0_web_controller_model_preserves_generation_sequence_and_e0_boundaries", 
   assert.equal(await pendingRefresh, false);
   assert.equal(lateRefresh.states.length, refreshStatesAfterDispose);
   assert.equal(lateRefresh.sockets.length, 0);
+
+  async function seedVolatile(harness) {
+    harness.queue.push(jsonResponse(deviceLogin(), 202));
+    assert.equal(await harness.controller.startDeviceLogin(), true);
+    harness.queue.push(
+      new Response("volatile diff", { headers: { "content-type": DIFF_TYPE } }),
+    );
+    assert.equal(await harness.controller.showDiff(), true);
+    assert.equal(harness.state().device.verificationCode, "AB12-CDE34");
+    assert.equal(harness.state().diff, "volatile diff");
+  }
+
+  async function assertDeferredClear({ invoke, resolveWith, afterResolve = [] }) {
+    const harness = makeHarness();
+    await load(harness);
+    await seedVolatile(harness);
+    let resolveRequest;
+    harness.queue.push(
+      () =>
+        new Promise((resolve) => {
+          resolveRequest = resolve;
+        }),
+      ...afterResolve,
+    );
+    const pending = invoke(harness.controller);
+    assert.equal(harness.state().busy, true);
+    assert.equal(harness.state().device, null);
+    assert.equal(harness.state().diff, "");
+    resolveRequest(resolveWith());
+    assert.equal(await pending, true);
+  }
+
+  await assertDeferredClear({
+    invoke: (controller) => controller.submitPrompt("deferred mutation"),
+    resolveWith: () => jsonResponse(turnReceipt(), 202),
+  });
+  await assertDeferredClear({
+    invoke: (controller) => controller.refresh(),
+    resolveWith: () => jsonResponse(snapshot()),
+    afterResolve: [jsonResponse({ state: "logged_out" })],
+  });
+  await assertDeferredClear({
+    invoke: (controller) => controller.logout(),
+    resolveWith: () => new Response(null, { status: 204 }),
+  });
+  await assertDeferredClear({
+    invoke: (controller) => controller.authenticate("C".repeat(32)),
+    resolveWith: () => jsonResponse(bootstrap(), 201),
+    afterResolve: [
+      jsonResponse(snapshot()),
+      jsonResponse({ state: "logged_out" }),
+    ],
+  });
 
   const frameSchedules = [
     (socket) => openStream(socket, 0),
