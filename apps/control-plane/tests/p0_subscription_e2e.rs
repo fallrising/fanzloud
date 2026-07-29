@@ -186,13 +186,14 @@ async fn p0_subscription_e2e_fake_codex_reaches_final_diff() {
         .expect("T007 concrete control plane"),
     );
     let router = plane.router();
-    let (address, stop, server) = start_loopback(router.clone())
-        .await
-        .expect("T007 loopback server");
-
-    let flow = run_flow(&router, address, &layout).await;
-    let _ = stop.send(());
-    let server_result = join_server(server).await;
+    let (flow, server_result) = match start_loopback(router.clone()).await {
+        Ok((address, stop, server)) => {
+            let flow = run_flow(&router, address, &layout).await;
+            let _ = stop.send(());
+            (flow, join_server(server).await)
+        }
+        Err(error) => (Err(error), Ok(())),
+    };
     let shutdown_result = plane
         .shutdown()
         .await
