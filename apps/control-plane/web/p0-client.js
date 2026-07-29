@@ -289,7 +289,11 @@ function isSeq(value) {
 }
 
 function validCloudTaskId(value) {
-  return typeof value === "string" && value.startsWith("task_") && value.length <= 128;
+  return (
+    typeof value === "string" &&
+    value.length <= 128 &&
+    /^task_[A-Za-z0-9_-]*$/.test(value)
+  );
 }
 
 function validCloudLifecycle(value) {

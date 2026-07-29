@@ -757,6 +757,19 @@ test("p0_web_stream_replays_and_reconnects_from_validated_cursor", async () => {
   assert.equal(JSON.parse(third.sent[0]).after_seq, 10);
   assert.ok(!JSON.stringify(harness.states).includes("SECRET HISTORY CANARY"));
 
+  const reconnectHarness = makeHarness();
+  let reconnectSocket = await load(reconnectHarness);
+  for (const delay of [250, 500, 1_000, 2_000, 4_000, 5_000, 5_000]) {
+    reconnectSocket.peerClose();
+    assert.deepEqual(reconnectHarness.timers.delays(), [delay]);
+    reconnectHarness.queue.push(
+      jsonResponse(snapshot()),
+      jsonResponse({ state: "logged_out" }),
+    );
+    await reconnectHarness.timers.runNext();
+    reconnectSocket = reconnectHarness.sockets.at(-1);
+  }
+
   const exactFrameHarness = makeHarness();
   const exactFrameSocket = await load(exactFrameHarness);
   exactFrameSocket.open();
@@ -773,6 +786,20 @@ test("p0_web_stream_replays_and_reconnects_from_validated_cursor", async () => {
   assert.equal(new TextEncoder().encode(exactFrame).length, JSON_LIMIT);
   exactFrameSocket.message(exactFrame);
   assert.equal(exactFrameHarness.state().error, "Session stream is reconnecting.");
+
+  const unicodeFrameHarness = makeHarness();
+  const unicodeFrameSocket = await load(unicodeFrameHarness);
+  unicodeFrameSocket.open();
+  const unicodeFrame = frame({
+    type: "error",
+    code: "stream_unavailable",
+    message: "é".repeat(Math.floor((JSON_LIMIT - emptyError.length) / 2) + 1),
+  });
+  assert.ok(unicodeFrame.length < JSON_LIMIT);
+  assert.ok(new TextEncoder().encode(unicodeFrame).length > JSON_LIMIT);
+  unicodeFrameSocket.message(unicodeFrame);
+  assert.deepEqual(unicodeFrameSocket.closeCalls.at(-1), { code: 1008, reason: "" });
+  assert.equal(unicodeFrameHarness.state().error, FIXED.protocol);
 
   const failingStorage = new MemoryStorage({}, { failSet: true });
   const storageHarness = makeHarness({ storage: failingStorage });
@@ -953,6 +980,63 @@ test("p0_web_stream_replays_and_reconnects_from_validated_cursor", async () => {
   );
   assert.deepEqual(impossibleEventSocket.closeCalls.at(-1), { code: 1008, reason: "" });
   assert.equal(impossibleEvent.state().error, FIXED.protocol);
+
+  for (const invalidTaskId of [
+    "task_💥",
+    "task_\u0000",
+    `task_${"a".repeat(124)}`,
+  ]) {
+    const invalidSnapshot = makeHarness();
+    invalidSnapshot.queue.push(
+      jsonResponse(
+        snapshot(0, {
+          state: "running",
+          currentTurn: currentTurn({
+            phase: "cloud",
+            lifecycle: {
+              state: "pending",
+              operation_id: OPERATION_ID,
+              task_id: invalidTaskId,
+            },
+            cancel_requested: false,
+          }),
+        }),
+      ),
+    );
+    assert.equal(await invalidSnapshot.controller.load(), false);
+
+    const invalidEvent = makeHarness();
+    const invalidEventSocket = await load(invalidEvent);
+    invalidEventSocket.open();
+    invalidEventSocket.message(
+      frame({
+        type: "replay_begin",
+        session_id: SESSION_ID,
+        after_seq: 0,
+        high_water_seq: 1,
+      }),
+    );
+    invalidEventSocket.message(
+      frame({
+        type: "event",
+        envelope: envelope(1, "lifecycle_changed", {
+          payload: {
+            type: "lifecycle_changed",
+            lifecycle: {
+              state: "pending",
+              operation_id: OPERATION_ID,
+              task_id: invalidTaskId,
+            },
+          },
+        }),
+      }),
+    );
+    assert.deepEqual(invalidEventSocket.closeCalls.at(-1), {
+      code: 1008,
+      reason: "",
+    });
+    assert.equal(invalidEvent.state().error, FIXED.protocol);
+  }
 
   for (const invalid of [
     new Uint8Array([1]),
