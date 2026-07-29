@@ -210,7 +210,9 @@ E0/E2 reconciliation behavior and is never treated as mutation retry authority.
   do not overlap; controls are disabled while it is in flight. At most one WebSocket generation is
   current.
 - A monotonically increasing controller generation invalidates late observation/stream callbacks
-  after refresh, logout, or disposal.
+  after refresh, logout, or disposal. The controller rechecks both disposal and the captured
+  generation after each awaited session/login observation before applying state or connecting a
+  socket.
 - A later refresh cannot overwrite a newer controller generation.
 - Stream events are accepted only for the current session and when `seq` is exactly the next
   sequence after the last displayed/stored sequence; replay duplicates at or below the cursor are
@@ -280,13 +282,34 @@ The controller ignores every server `message` and recognizes these exact accepte
 | Correct explicit input/action | `origin_forbidden`, `session_limit`, `idempotency_key_invalid`, `idempotency_conflict`, `unsupported_media_type`, `request_too_large`, `body_not_empty`, `malformed_json`, `invalid_request`, `invalid_value`, `acknowledgement_required`, `task_not_listed`, `login_already_running`, `already_logged_in`, `login_failed`, `turn_already_running`, `no_current_turn`, `session_wrong_state`, `recovery_decision_stale`, `provider_turn_running`, `no_current_operation`, `provider_wrong_state`, `diff_not_ready`, `diff_canceled` | Show `The explicit action was rejected; refresh before deciding whether to act again.` |
 | Service/operator repair, no automatic mutation retry | `idempotency_unavailable`, `service_unavailable`, `login_unavailable`, `login_version_mismatch`, `login_provider_drift`, `login_output_limit`, `login_status_unavailable`, `login_process_unavailable`, `login_state_unavailable`, `login_state_invalid`, `session_config_invalid`, `session_stopped`, `subscriber_limit`, `session_sequence_exhausted`, `provider_state_conflict`, `provider_scope_unavailable`, `provider_busy`, `provider_runner_unavailable`, `provider_read_unavailable`, `provider_operation_conflict`, `provider_state_invalid`, `provider_state_unavailable`, `diff_scope_unavailable`, `diff_busy`, `diff_version_mismatch`, `diff_boundary_unavailable`, `diff_process_unavailable`, `diff_timeout`, `diff_output_limit`, `diff_provider_drift`, `diff_invalid` | Show `The service could not complete the request; no command was retried.` |
 
+Each accepted HTTP code is valid only with its exact inherited T005B status:
+
+| Status | Exact accepted codes |
+|---:|---|
+| 400 | `idempotency_key_invalid`, `malformed_json` |
+| 401 | `authentication_required` |
+| 403 | `origin_forbidden` |
+| 409 | `instance_changed`, `idempotency_conflict`, `login_already_running`, `already_logged_in`, `login_failed`, `login_outcome_unknown`, `turn_already_running`, `no_current_turn`, `session_wrong_state`, `session_changed`, `operation_changed`, `history_gap`, `future_cursor`, `provider_state_conflict`, `provider_turn_running`, `no_current_operation`, `provider_wrong_state`, `recovery_decision_stale`, `provider_operation_conflict`, `provider_outcome_unknown`, `provider_recovery_required`, `diff_not_ready`, `diff_authority_changed`, `diff_canceled` |
+| 413 | `request_too_large` |
+| 415 | `unsupported_media_type` |
+| 422 | `body_not_empty`, `invalid_request`, `invalid_value`, `acknowledgement_required`, `task_not_listed` |
+| 429 | `session_limit` |
+| 503 | `idempotency_unavailable`, `service_unavailable`, `login_unavailable`, `login_version_mismatch`, `login_provider_drift`, `login_output_limit`, `login_status_unavailable`, `login_process_unavailable`, `login_state_unavailable`, `login_state_invalid`, `session_config_invalid`, `session_stopped`, `subscriber_limit`, `session_sequence_exhausted`, `provider_scope_unavailable`, `provider_busy`, `provider_runner_unavailable`, `provider_read_unavailable`, `provider_state_invalid`, `provider_state_unavailable`, `diff_scope_unavailable`, `diff_busy`, `diff_version_mismatch`, `diff_boundary_unavailable`, `diff_process_unavailable`, `diff_output_limit`, `diff_provider_drift`, `diff_invalid` |
+| 504 | `diff_timeout` |
+
+No other status/code pairing is accepted. The optional `operation_id` field is accepted only on a
+code inherited from `CloudLifecycleErrorCategory`, and must be a non-nil UUID; all other codes
+require exactly `code` and `message`.
+
 The exact accepted WebSocket codes are `authentication_expired`, `subscribe_timeout`,
 `protocol_error`, `unsupported_version`, `wrong_session`, `history_gap`, `future_cursor`,
 `subscriber_limit`, `subscriber_lagged`, and `stream_unavailable`. Authentication expiry clears
 identity. Wrong session/gap/future cursor perform the snapshot-high-water resynchronization once.
 Timeout/subscriber-limit/lag/unavailable and close 1012 use bounded read-refresh/reconnect.
 Protocol error and unsupported version stop automatic reconnect until manual refresh. Peer/network
-close uses bounded read-refresh/reconnect. No close reason is inspected or displayed.
+close uses bounded read-refresh/reconnect. `subscriber_lagged` accepts exactly either the base
+`type`/`code`/`message` shape or that shape plus a safe-integer `latest_available`; no other error
+shape is accepted. No close reason is inspected or displayed.
 
 Unknown codes, malformed/non-JSON errors, redirect responses, invalid media types, invalid UTF-8,
 schema drift, body-read failure, and raw exceptions become the one fixed `request_failed` result.
@@ -387,12 +410,17 @@ UTF-8 byte length versus JavaScript length, and reader cancellation on overflow.
 every legal phase plus out-of-order, binary, oversized, malformed, unknown-field, and impossible
 frames. Test 9 proves load/refresh make only GET plus WebSocket subscribe operations and covers
 same/mismatched identity and future stored cursors. Test 10 covers every allowlisted HTTP/WS
-disposition plus 301/302/303/307/308 rejection and unknown/error canaries. Test 11 inspects the
+disposition at its exact status, every wrong HTTP status/code pairing, both legal
+`subscriber_lagged` shapes, plus 301/302/303/307/308 rejection and unknown/error canaries. Test 11 inspects the
 actual DOM adapter/controller sources for forbidden authority and sinks, imports both production
 modules, and mounts the adapter against a fake DOM. Test 12 runs a
 deterministic action/response/frame model across partitioned schedules and asserts the mutation log
 equals the explicit action log, including timeout/abort/late-response schedules and inherited
-per-action atomicity/ambiguity dispositions.
+per-action atomicity/ambiguity dispositions. Its schedule matrix covers every explicit mutation
+kind; accepted success, fixed error, redirect/network/timeout, concurrent-gesture, refresh,
+disposal, and late-success outcomes; legal and invalid frame ordering; and stale generation
+callbacks. Each schedule records the admitted explicit action and requires exactly zero or one
+matching mutation dispatch with no automatic duplicate or cross-action mutation.
 
 The official dependency-free command is:
 
