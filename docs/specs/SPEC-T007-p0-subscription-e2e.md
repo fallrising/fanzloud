@@ -1,7 +1,7 @@
 ---
 id: SPEC-T007
 title: P0 subscription end-to-end acceptance
-status: draft
+status: ready
 task: T007
 contract_units:
   [CU-AUTH-P0-01, CU-AUTH-P0-02, CU-AGT-P0-01, CU-CLOUD-P0-01, CU-AGT-P0-02,
@@ -193,7 +193,7 @@ git diff --check
 
 | Command or check | Result | Evidence URI or hash |
 |---|---|---|
-| Fresh design review | Pending | T007 design commit |
+| Fresh design review | `DESIGN ACCEPTED` | `58d644f`; fresh-context Codex subagent |
 | Failing skeleton before implementation | Pending | T007 skeleton commit |
 | Focused deterministic E2E | Pending | ACCEPT-T007 |
 | Ten consecutive deterministic E2E runs | Pending | ACCEPT-T007 |
