@@ -14,9 +14,10 @@ code beside `CODEX_HOME`.
 Branch: `main`
 
 T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, T004C, the T004 coordination
-parent, T005A, T005B, T005C, the T005 coordination parent, and T006 are Accepted. T006 is the
-latest completed production task; `ACCEPT-T006` records its design/test-first history,
-implementation repair rounds, final fresh-context review, local gates, and hosted evidence.
+parent, T005A, T005B, T005C, the T005 coordination parent, T006, and T007 are Accepted. The
+complete private personal-BYOS P0 slice is Accepted. `ACCEPT-T007` records the final
+spec/test-first history, deterministic composition, fresh-context review, local and hosted
+evidence, and honestly unavailable live-smoke gate.
 
 ## Accepted Baseline
 
@@ -231,6 +232,20 @@ review returned `COMPOSITION ACCEPTED`, and the parent is Accepted.
 - Fresh final review returned `T006 ACCEPTED`; hosted CI run 30423184446 passed, including the
   pinned Node 24.18.0 step.
 
+### T007 — P0 subscription end-to-end acceptance
+
+- Added one Linux-only, network-free fake-Codex integration test over the concrete accepted
+  credential, login, Cloud, session, HTTP, embedded-page, real loopback WebSocket, diff, and logout
+  boundaries.
+- Proved exact final-argv prompt delivery with null stdin, one submit, bounded status polling, one
+  diff read, replay/live/reconnect ordering, no disconnect mutation, secret containment, and no
+  browser-selected or fixture-created repository/provider authority.
+- The compiling fixed-failure skeleton preceded implementation. The final test passed alone, in ten
+  consecutive runs, in the 37-test control-plane package, and in the 179-test workspace.
+- A fresh-context read-only final review returned `T007 ACCEPTED`; hosted CI run 30425447197 passed.
+- The live smoke was `not run — credential/environment gate unavailable` because all nine required
+  administrator variables were absent. No credentials or provider success were fabricated.
+
 ## Verified Pinned Cloud Surface
 
 The official `rust-v0.145.0` source and local pinned CLI help establish:
@@ -262,11 +277,11 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Materialize T007 spec-first from TD §§1.7 and 15.0.
-2. Obtain fresh design acceptance, then complete the exact deterministic fake-Codex P0
-   subscription E2E test across the accepted T002–T006 surfaces.
-3. Record the operator-authenticated live smoke only when the required credentials/environment are
-   genuinely available; otherwise record it explicitly as gated and unavailable, never as passed.
+1. Begin the independent P1 Batch A path by materializing T020 spec-first from TD §§15.1 and 16.2.
+2. Preserve the Accepted P0 boundary; P1 work must not add a dependency on live P0 provider
+   availability.
+3. Run a T007 live smoke only in a later explicitly authorized private environment with all
+   documented credentials and administrator configuration present.
 
 ADR-0004 and the complete T005 decomposition received fresh Cursor Agent design acceptance after
 three rejected drafts repaired durability/authentication, state-transition, cancel/shutdown,

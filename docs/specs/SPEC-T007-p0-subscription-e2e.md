@@ -1,7 +1,7 @@
 ---
 id: SPEC-T007
 title: P0 subscription end-to-end acceptance
-status: ready
+status: accepted
 task: T007
 contract_units:
   [CU-AUTH-P0-01, CU-AUTH-P0-02, CU-AGT-P0-01, CU-CLOUD-P0-01, CU-AGT-P0-02,
@@ -194,13 +194,13 @@ git diff --check
 | Command or check | Result | Evidence URI or hash |
 |---|---|---|
 | Fresh design review | `DESIGN ACCEPTED` | `58d644f`; fresh-context Codex subagent |
-| Failing skeleton before implementation | Pending | T007 skeleton commit |
-| Focused deterministic E2E | Pending | ACCEPT-T007 |
-| Ten consecutive deterministic E2E runs | Pending | ACCEPT-T007 |
-| Workspace gates | Pending | ACCEPT-T007 |
-| Live smoke | Pending/gated | ACCEPT-T007 |
-| Fresh final acceptance review | Pending | ACCEPT-T007 |
-| Hosted CI | Pending | ACCEPT-T007 |
+| Failing skeleton before implementation | Passed | `adf5d19`; compiled, then fixed failure |
+| Focused deterministic E2E | Passed | `2e54567`; ACCEPT-T007 |
+| Ten consecutive deterministic E2E runs | Passed | `2e54567`; ACCEPT-T007 |
+| Workspace gates | Passed: 179 Rust, 10 Node | `2e54567`; ACCEPT-T007 |
+| Live smoke | `not run — credential/environment gate unavailable` | ACCEPT-T007 |
+| Fresh final acceptance review | `T007 ACCEPTED` | `2e54567`; fresh-context Codex subagent |
+| Hosted CI | Passed | [run 30425447197](https://github.com/fallrising/fanzloud/actions/runs/30425447197) |
 
 # Traceability
 
