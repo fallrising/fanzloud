@@ -185,7 +185,8 @@ before dispatch. Verification instructions are cleared on login cancel, definiti
 change, refresh, logout, authentication loss, and disposal. Diff text is cleared before retrieval,
 on any refresh or mutation, logout, authentication loss, and disposal. Event summaries are fixed
 allowlisted labels, retain at most 256 entries, and are cleared on identity change, logout,
-authentication loss, and disposal.
+authentication loss, and disposal. For every network-backed transition, the controller publishes
+the required cleared volatile state to the DOM adapter before dispatching the request.
 
 # Side Effects
 
@@ -240,12 +241,14 @@ Snapshot state and current-turn projection must also match the exact reachable T
 | Session state | Exact accepted current-turn projection |
 |---|---|
 | `ready` | absent; `canceled_before_cloud_start`; or `cloud` with `failed_before_submit`, `ready`, `applied`, `provider_error`, `canceled_locally`, or `abandoned_unknown` lifecycle |
-| `running` | `queued`; `starting`; or `cloud` with `submitting` or `pending` lifecycle |
+| `running` | `queued`; `starting`; or `cloud` with `pending` lifecycle |
 | `recovery_required` | `cloud` with `outcome_unknown` lifecycle |
 | `monitoring_degraded` | `monitoring_degraded`, with its top-level operation ID exactly equal to the nested last-known `pending` operation ID |
-| `stopped` | absent; `canceled_before_cloud_start`; `stopped_before_cloud_start`; `stopped_after_lower_failure`; any valid `cloud` lifecycle; or a valid operation-matched `monitoring_degraded` projection |
+| `stopped` | absent; `canceled_before_cloud_start`; `stopped_before_cloud_start`; `stopped_after_lower_failure`; any valid non-`submitting` `cloud` lifecycle; or a valid operation-matched `monitoring_degraded` projection |
 
 Every other independently well-shaped but unreachable state/projection combination is invalid.
+The controller also rejects `submitting` in an event lifecycle: accepted T005A never synthesizes
+that lower in-progress ledger state into its public snapshot or event protocol.
 
 # Streaming Semantics
 
@@ -434,7 +437,8 @@ disposal during both the initial mutation and its automatic refresh, and late-su
 legal and invalid frame ordering; the complete impossible-snapshot state/projection matrix; and
 stale generation callbacks. Each schedule records the admitted explicit action and requires
 exactly zero or one matching mutation dispatch with no automatic duplicate or cross-action
-mutation.
+mutation. Deferred-response partitions assert that verification-code and diff clear publications
+occur before refresh, mutation, diff, and logout request completion.
 
 The official dependency-free command is:
 
