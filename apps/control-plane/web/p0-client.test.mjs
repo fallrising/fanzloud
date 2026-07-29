@@ -381,6 +381,30 @@ function snapshot(highWater = 0, options = {}) {
   };
 }
 
+function cloudLifecycle(state, operationId = OPERATION_ID) {
+  if (
+    state === "submitting" ||
+    state === "failed_before_submit" ||
+    state === "outcome_unknown" ||
+    state === "abandoned_unknown"
+  ) {
+    return { state, operation_id: operationId };
+  }
+  if (state === "canceled_locally") {
+    return {
+      state,
+      operation_id: operationId,
+      task_id: null,
+      provider_may_continue: true,
+    };
+  }
+  return { state, operation_id: operationId, task_id: "task_1" };
+}
+
+function currentTurn(projection) {
+  return { turn_id: TURN_ID, projection };
+}
+
 function bootstrap() {
   return {
     actor: "operator",
@@ -445,7 +469,8 @@ function makeHarness(options = {}) {
     return typeof action === "function" ? action(path, init) : action;
   }
 
-  const controller = createP0Controller({
+  let controller;
+  controller = createP0Controller({
     fetch: fetchRequest,
     createWebSocket: (url) => {
       const socket = new FakeSocket(url);
@@ -465,7 +490,12 @@ function makeHarness(options = {}) {
     AbortController,
     TextEncoder,
     TextDecoder,
-    publish: (state) => states.push(state),
+    publish: (state) => {
+      states.push(state);
+      if (controller) {
+        options.onPublish?.(state, controller);
+      }
+    },
   });
 
   return {
@@ -746,6 +776,149 @@ test("p0_web_stream_replays_and_reconnects_from_validated_cursor", async () => {
   await storageHarness.timers.runNext();
   storageHarness.sockets.at(-1).open();
   assert.equal(JSON.parse(storageHarness.sockets.at(-1).sent[0]).after_seq, 4);
+
+  const cloudStates = [
+    "submitting",
+    "failed_before_submit",
+    "outcome_unknown",
+    "pending",
+    "ready",
+    "applied",
+    "provider_error",
+    "canceled_locally",
+    "abandoned_unknown",
+  ];
+  const projectionCases = [
+    ["queued", { phase: "queued" }],
+    ["starting", { phase: "starting", cancel_requested: false }],
+    ["canceled", { phase: "canceled_before_cloud_start" }],
+    ["stopped_before", { phase: "stopped_before_cloud_start" }],
+    ["stopped_after", { phase: "stopped_after_lower_failure" }],
+    [
+      "degraded",
+      {
+        phase: "monitoring_degraded",
+        operation_id: OPERATION_ID,
+        last_known_pending: cloudLifecycle("pending"),
+        cancel_requested: false,
+      },
+    ],
+    [
+      "degraded_mismatch",
+      {
+        phase: "monitoring_degraded",
+        operation_id: OTHER_SESSION_ID,
+        last_known_pending: cloudLifecycle("pending"),
+        cancel_requested: false,
+      },
+    ],
+    ...cloudStates.map((state) => [
+      `cloud_${state}`,
+      {
+        phase: "cloud",
+        lifecycle: cloudLifecycle(state),
+        cancel_requested: false,
+      },
+    ]),
+  ];
+  const readyCloud = new Set([
+    "failed_before_submit",
+    "ready",
+    "applied",
+    "provider_error",
+    "canceled_locally",
+    "abandoned_unknown",
+  ]);
+  function combinationIsReachable(state, name) {
+    if (name === "absent") {
+      return state === "ready" || state === "stopped";
+    }
+    if (state === "ready") {
+      return (
+        name === "canceled" ||
+        (name.startsWith("cloud_") && readyCloud.has(name.slice(6)))
+      );
+    }
+    if (state === "running") {
+      return (
+        name === "queued" ||
+        name === "starting" ||
+        name === "cloud_submitting" ||
+        name === "cloud_pending"
+      );
+    }
+    if (state === "recovery_required") {
+      return name === "cloud_outcome_unknown";
+    }
+    if (state === "monitoring_degraded") {
+      return name === "degraded";
+    }
+    return (
+      state === "stopped" &&
+      (name === "canceled" ||
+        name === "stopped_before" ||
+        name === "stopped_after" ||
+        name === "degraded" ||
+        name.startsWith("cloud_"))
+    );
+  }
+
+  const semanticMatrix = makeHarness();
+  await load(semanticMatrix);
+  for (const state of [
+    "ready",
+    "running",
+    "recovery_required",
+    "monitoring_degraded",
+    "stopped",
+  ]) {
+    for (const [name, projection] of [
+      ["absent", null],
+      ...projectionCases,
+    ]) {
+      const reachable = combinationIsReachable(state, name);
+      semanticMatrix.queue.push(
+        jsonResponse(
+          snapshot(0, {
+            state,
+            currentTurn: projection === null ? null : currentTurn(projection),
+          }),
+        ),
+      );
+      if (reachable) {
+        semanticMatrix.queue.push(jsonResponse({ state: "logged_out" }));
+      }
+      assert.equal(
+        await semanticMatrix.controller.refresh(),
+        reachable,
+        `${state}/${name}`,
+      );
+    }
+  }
+
+  const impossibleSnapshot = makeHarness();
+  const impossibleSocket = await load(impossibleSnapshot);
+  impossibleSocket.open();
+  impossibleSocket.message(
+    frame({
+      type: "replay_begin",
+      session_id: SESSION_ID,
+      after_seq: 0,
+      high_water_seq: 0,
+    }),
+  );
+  impossibleSocket.message(
+    frame({
+      type: "snapshot",
+      snapshot: snapshot(0, {
+        state: "ready",
+        currentTurn: currentTurn({ phase: "queued" }),
+      }),
+      high_water_seq: 0,
+    }),
+  );
+  assert.deepEqual(impossibleSocket.closeCalls.at(-1), { code: 1008, reason: "" });
+  assert.equal(impossibleSnapshot.state().error, FIXED.protocol);
 
   for (const invalid of [
     new Uint8Array([1]),
@@ -1307,6 +1480,47 @@ test("p0_web_controller_model_preserves_generation_sequence_and_e0_boundaries", 
       assert.equal(ambiguous.state().error, FIXED.request);
     }
 
+    for (const outcome of ["ambiguous-refresh", "resync-refresh"]) {
+      let armed = false;
+      let disposedDuringRefresh = false;
+      let statesAfterRefreshDispose = 0;
+      let refreshDispose;
+      refreshDispose = makeHarness({
+        onPublish(state, controller) {
+          if (
+            armed &&
+            !disposedDuringRefresh &&
+            !state.busy &&
+            refreshDispose.requests.at(-1)?.path === ROUTES.login
+          ) {
+            disposedDuringRefresh = true;
+            controller.dispose();
+            statesAfterRefreshDispose = refreshDispose.states.length;
+          }
+        },
+      });
+      if (action.authenticated) {
+        await load(refreshDispose);
+      }
+      refreshDispose.queue.push(
+        outcome === "ambiguous-refresh"
+          ? new Error("AUTO REFRESH SECRET")
+          : errorResponse("instance_changed", "AUTO RESYNC SECRET", 409),
+        jsonResponse(snapshot()),
+        jsonResponse({ state: "logged_out" }),
+      );
+      armed = true;
+      assert.equal(
+        await action.invoke(refreshDispose.controller),
+        false,
+        `${action.name}: ${outcome}`,
+      );
+      assert.equal(disposedDuringRefresh, true, `${action.name}: ${outcome}`);
+      assert.equal(refreshDispose.states.length, statesAfterRefreshDispose);
+      assert.deepEqual(mutationLog(refreshDispose), [[action.method, action.path]]);
+      assert.ok(!JSON.stringify(refreshDispose.states).includes("SECRET"));
+    }
+
     const timeout = await prepare(action);
     timeout.queue.push(
       (_path, init) =>
@@ -1344,6 +1558,36 @@ test("p0_web_controller_model_preserves_generation_sequence_and_e0_boundaries", 
     assert.equal(late.states.length, statesAfterDispose);
     assert.deepEqual(mutationLog(late), [[action.method, action.path]]);
   }
+
+  let cancelRefreshArmed = false;
+  let cancelRefreshDisposed = false;
+  let cancelRefreshStates = 0;
+  let cancelRefresh;
+  cancelRefresh = makeHarness({
+    onPublish(state, controller) {
+      if (
+        cancelRefreshArmed &&
+        !cancelRefreshDisposed &&
+        !state.busy &&
+        cancelRefresh.requests.at(-1)?.path === ROUTES.login
+      ) {
+        cancelRefreshDisposed = true;
+        controller.dispose();
+        cancelRefreshStates = cancelRefresh.states.length;
+      }
+    },
+  });
+  await load(cancelRefresh);
+  cancelRefresh.queue.push(
+    jsonResponse(snapshot(0, { sessionId: OTHER_SESSION_ID })),
+    jsonResponse(snapshot()),
+    jsonResponse({ state: "logged_out" }),
+  );
+  cancelRefreshArmed = true;
+  assert.equal(await cancelRefresh.controller.cancelTurn(), false);
+  assert.equal(cancelRefreshDisposed, true);
+  assert.equal(cancelRefresh.states.length, cancelRefreshStates);
+  assert.deepEqual(mutationLog(cancelRefresh), [["POST", ROUTES.turnCancel]]);
 
   const lateRefresh = makeHarness();
   let resolveLogin;

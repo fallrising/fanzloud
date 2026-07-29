@@ -53,6 +53,14 @@ const CLOUD_STATES = new Set([
   "canceled_locally",
   "abandoned_unknown",
 ]);
+const READY_CLOUD_STATES = new Set([
+  "failed_before_submit",
+  "ready",
+  "applied",
+  "provider_error",
+  "canceled_locally",
+  "abandoned_unknown",
+]);
 
 const REAUTH_CODES = new Set(["authentication_required"]);
 const RESYNC_CODES = new Set([
@@ -340,7 +348,48 @@ function validProjection(value) {
         isUuid(value.operation_id) &&
         validCloudLifecycle(value.last_known_pending) &&
         value.last_known_pending.state === "pending" &&
+        value.operation_id === value.last_known_pending.operation_id &&
         typeof value.cancel_requested === "boolean"
+      );
+    default:
+      return false;
+  }
+}
+
+function validSnapshotCombination(state, currentTurn) {
+  if (currentTurn === null) {
+    return state === "ready" || state === "stopped";
+  }
+  const projection = currentTurn.projection;
+  switch (state) {
+    case "ready":
+      return (
+        projection.phase === "canceled_before_cloud_start" ||
+        (projection.phase === "cloud" &&
+          READY_CLOUD_STATES.has(projection.lifecycle.state))
+      );
+    case "running":
+      return (
+        projection.phase === "queued" ||
+        projection.phase === "starting" ||
+        (projection.phase === "cloud" &&
+          (projection.lifecycle.state === "submitting" ||
+            projection.lifecycle.state === "pending"))
+      );
+    case "recovery_required":
+      return (
+        projection.phase === "cloud" &&
+        projection.lifecycle.state === "outcome_unknown"
+      );
+    case "monitoring_degraded":
+      return projection.phase === "monitoring_degraded";
+    case "stopped":
+      return (
+        projection.phase === "canceled_before_cloud_start" ||
+        projection.phase === "stopped_before_cloud_start" ||
+        projection.phase === "stopped_after_lower_failure" ||
+        projection.phase === "cloud" ||
+        projection.phase === "monitoring_degraded"
       );
     default:
       return false;
@@ -359,12 +408,13 @@ function validSnapshot(value) {
     return false;
   }
   if (value.current_turn === null) {
-    return true;
+    return validSnapshotCombination(value.state, null);
   }
   return (
     exactKeys(value.current_turn, ["turn_id", "projection"]) &&
     isUuid(value.current_turn.turn_id) &&
-    validProjection(value.current_turn.projection)
+    validProjection(value.current_turn.projection) &&
+    validSnapshotCombination(value.state, value.current_turn)
   );
 }
 
@@ -937,8 +987,16 @@ export function createP0Controller(dependencies) {
     if (result.disposition === "resync" || result.ambiguous) {
       forceSnapshotCursor = true;
       clearStorage();
-      const refreshed = await refresh();
-      if (refreshed && state.authenticated) {
+      const refreshPromise = refresh();
+      const refreshGeneration = generation;
+      const refreshed = await refreshPromise;
+      if (
+        refreshed &&
+        !disposed &&
+        generation === refreshGeneration &&
+        identity &&
+        state.authenticated
+      ) {
         setError(result.message);
       }
       return false;
@@ -969,6 +1027,9 @@ export function createP0Controller(dependencies) {
     }
     if (!sessionResult.ok) {
       endHttp();
+      if (disposed || generation !== myGeneration) {
+        return false;
+      }
       if (sessionResult.disposition === "reauth") {
         enterBootstrap(sessionResult.message);
       } else {
@@ -1006,6 +1067,9 @@ export function createP0Controller(dependencies) {
       return false;
     }
     endHttp();
+    if (disposed || generation !== myGeneration) {
+      return false;
+    }
     if (!loginResult.ok) {
       if (loginResult.disposition === "reauth") {
         enterBootstrap(loginResult.message);
@@ -1315,6 +1379,9 @@ export function createP0Controller(dependencies) {
       return false;
     }
     endHttp();
+    if (disposed || generation !== myGeneration) {
+      return false;
+    }
     if (!result.ok) {
       return handleFailure(result);
     }
@@ -1363,13 +1430,28 @@ export function createP0Controller(dependencies) {
       return false;
     }
     endHttp();
+    if (
+      disposed ||
+      generation !== myGeneration ||
+      identity !== requestIdentity
+    ) {
+      return false;
+    }
     if (!result.ok) {
       return handleFailure(result);
     }
     const applied = apply(result.value);
     if (applied === false) {
-      const refreshed = await refresh();
-      if (refreshed && state.authenticated) {
+      const refreshPromise = refresh();
+      const refreshGeneration = generation;
+      const refreshed = await refreshPromise;
+      if (
+        refreshed &&
+        !disposed &&
+        generation === refreshGeneration &&
+        identity &&
+        state.authenticated
+      ) {
         setError(MESSAGES.state_changed);
       }
       return false;
@@ -1464,6 +1546,13 @@ export function createP0Controller(dependencies) {
       return false;
     }
     endHttp();
+    if (
+      disposed ||
+      generation !== myGeneration ||
+      identity !== requestIdentity
+    ) {
+      return false;
+    }
     if (!result.ok) {
       return handleFailure(result);
     }
@@ -1511,6 +1600,13 @@ export function createP0Controller(dependencies) {
       return false;
     }
     endHttp();
+    if (
+      disposed ||
+      generation !== myGeneration ||
+      identity !== requestIdentity
+    ) {
+      return false;
+    }
     if (!result.ok) {
       return handleFailure(result);
     }
