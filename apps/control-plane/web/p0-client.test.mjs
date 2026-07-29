@@ -116,6 +116,95 @@ const HTTP_GROUPS = Object.freeze({
     "diff_invalid",
   ],
 });
+const HTTP_STATUS = new Map([
+  ...["idempotency_key_invalid", "malformed_json"].map((code) => [code, 400]),
+  ["authentication_required", 401],
+  ["origin_forbidden", 403],
+  ...[
+    "instance_changed",
+    "idempotency_conflict",
+    "login_already_running",
+    "already_logged_in",
+    "login_failed",
+    "login_outcome_unknown",
+    "turn_already_running",
+    "no_current_turn",
+    "session_wrong_state",
+    "session_changed",
+    "operation_changed",
+    "history_gap",
+    "future_cursor",
+    "provider_state_conflict",
+    "provider_turn_running",
+    "no_current_operation",
+    "provider_wrong_state",
+    "recovery_decision_stale",
+    "provider_operation_conflict",
+    "provider_outcome_unknown",
+    "provider_recovery_required",
+    "diff_not_ready",
+    "diff_authority_changed",
+    "diff_canceled",
+  ].map((code) => [code, 409]),
+  ["request_too_large", 413],
+  ["unsupported_media_type", 415],
+  ...[
+    "body_not_empty",
+    "invalid_request",
+    "invalid_value",
+    "acknowledgement_required",
+    "task_not_listed",
+  ].map((code) => [code, 422]),
+  ["session_limit", 429],
+  ...[
+    "idempotency_unavailable",
+    "service_unavailable",
+    "login_unavailable",
+    "login_version_mismatch",
+    "login_provider_drift",
+    "login_output_limit",
+    "login_status_unavailable",
+    "login_process_unavailable",
+    "login_state_unavailable",
+    "login_state_invalid",
+    "session_config_invalid",
+    "session_stopped",
+    "subscriber_limit",
+    "session_sequence_exhausted",
+    "provider_scope_unavailable",
+    "provider_busy",
+    "provider_runner_unavailable",
+    "provider_read_unavailable",
+    "provider_state_invalid",
+    "provider_state_unavailable",
+    "diff_scope_unavailable",
+    "diff_busy",
+    "diff_version_mismatch",
+    "diff_boundary_unavailable",
+    "diff_process_unavailable",
+    "diff_output_limit",
+    "diff_provider_drift",
+    "diff_invalid",
+  ].map((code) => [code, 503]),
+  ["diff_timeout", 504],
+]);
+const OPERATION_ERROR_CODES = new Set([
+  "provider_scope_unavailable",
+  "provider_busy",
+  "provider_turn_running",
+  "no_current_operation",
+  "provider_wrong_state",
+  "recovery_decision_stale",
+  "task_not_listed",
+  "acknowledgement_required",
+  "provider_runner_unavailable",
+  "provider_read_unavailable",
+  "provider_operation_conflict",
+  "provider_outcome_unknown",
+  "provider_state_invalid",
+  "provider_state_unavailable",
+  "provider_recovery_required",
+]);
 
 class MemoryStorage {
   constructor(initial = {}, options = {}) {
@@ -262,8 +351,22 @@ function bytesResponse(chunks, options = {}) {
   return { response, wasCanceled: () => canceled };
 }
 
-function errorResponse(code, message = "UNTRUSTED ERROR CANARY", status = 400) {
-  return jsonResponse({ error: { code, message } }, status);
+function errorResponse(
+  code,
+  message = "UNTRUSTED ERROR CANARY",
+  status = 400,
+  operationId,
+) {
+  return jsonResponse(
+    {
+      error: {
+        code,
+        message,
+        ...(operationId === undefined ? {} : { operation_id: operationId }),
+      },
+    },
+    status,
+  );
 }
 
 function snapshot(highWater = 0, options = {}) {
@@ -803,19 +906,62 @@ test("p0_web_errors_and_diagnostics_exclude_sensitive_canaries", async () => {
     rejected: FIXED.rejected,
     service: FIXED.service,
   };
+  const groupedCodes = new Set(Object.values(HTTP_GROUPS).flat());
+  assert.deepEqual(groupedCodes, new Set(HTTP_STATUS.keys()));
   for (const [group, codes] of Object.entries(HTTP_GROUPS)) {
     for (const code of codes) {
+      const status = HTTP_STATUS.get(code);
       const harness = makeHarness();
       await load(harness);
-      harness.queue.push(errorResponse(code));
+      harness.queue.push(errorResponse(code, "UNTRUSTED ERROR CANARY", status));
       if (group === "resync") {
         harness.queue.push(jsonResponse(snapshot()), jsonResponse({ state: "logged_out" }));
       }
       assert.equal(await harness.controller.showDiff(), false, code);
       assert.equal(harness.state().error, expectedMessages[group], code);
       assert.ok(!JSON.stringify(harness.states).includes("UNTRUSTED ERROR CANARY"), code);
+
+      const wrongStatus = makeHarness();
+      await load(wrongStatus);
+      wrongStatus.queue.push(
+        errorResponse(
+          code,
+          "WRONG STATUS SECRET",
+          status === 400 ? 409 : 400,
+        ),
+      );
+      assert.equal(await wrongStatus.controller.showDiff(), false, code);
+      assert.equal(wrongStatus.state().error, FIXED.request, code);
+      assert.ok(!JSON.stringify(wrongStatus.states).includes("WRONG STATUS SECRET"), code);
+
+      const withOperation = makeHarness();
+      await load(withOperation);
+      withOperation.queue.push(
+        errorResponse(code, "OPERATION FIELD SECRET", status, OPERATION_ID),
+      );
+      assert.equal(await withOperation.controller.showDiff(), false, code);
+      assert.equal(
+        withOperation.state().error,
+        OPERATION_ERROR_CODES.has(code) ? expectedMessages[group] : FIXED.request,
+        code,
+      );
+      assert.ok(!JSON.stringify(withOperation.states).includes("OPERATION FIELD SECRET"), code);
     }
   }
+
+  const invalidOperation = makeHarness();
+  await load(invalidOperation);
+  invalidOperation.queue.push(
+    errorResponse(
+      "provider_busy",
+      "INVALID OPERATION SECRET",
+      503,
+      "00000000-0000-0000-0000-000000000000",
+    ),
+  );
+  assert.equal(await invalidOperation.controller.showDiff(), false);
+  assert.equal(invalidOperation.state().error, FIXED.request);
+  assert.ok(!JSON.stringify(invalidOperation.states).includes("INVALID OPERATION SECRET"));
 
   const jsonPrefix = '{"error":{"code":"diff_not_ready","message":"';
   const jsonSuffix = '"}}';
@@ -827,7 +973,7 @@ test("p0_web_errors_and_diagnostics_exclude_sensitive_canaries", async () => {
   await load(jsonBounds);
   const exactJson = bytesResponse(
     [exactJsonBytes.slice(0, 123), exactJsonBytes.slice(123)],
-    { status: 400, contentType: JSON_TYPE },
+    { status: 409, contentType: JSON_TYPE },
   );
   jsonBounds.queue.push(exactJson.response);
   assert.equal(await jsonBounds.controller.showDiff(), false);
@@ -838,7 +984,7 @@ test("p0_web_errors_and_diagnostics_exclude_sensitive_canaries", async () => {
   );
   const overJson = bytesResponse(
     [overJsonBytes.slice(0, JSON_LIMIT), overJsonBytes.slice(JSON_LIMIT)],
-    { status: 400, contentType: JSON_TYPE },
+    { status: 409, contentType: JSON_TYPE },
   );
   jsonBounds.queue.push(overJson.response);
   assert.equal(await jsonBounds.controller.showDiff(), false);
@@ -853,7 +999,7 @@ test("p0_web_errors_and_diagnostics_exclude_sensitive_canaries", async () => {
   assert.ok(new TextDecoder().decode(unicodeJsonBytes).length < JSON_LIMIT);
   assert.ok(unicodeJsonBytes.byteLength > JSON_LIMIT);
   const unicodeJson = bytesResponse([unicodeJsonBytes], {
-    status: 400,
+    status: 409,
     contentType: JSON_TYPE,
   });
   jsonBounds.queue.push(unicodeJson.response);
@@ -873,6 +1019,7 @@ test("p0_web_errors_and_diagnostics_exclude_sensitive_canaries", async () => {
     ],
     ["future_cursor", { latest_available: 3 }, FIXED.resync],
     ["subscriber_limit", {}, "Session stream is reconnecting."],
+    ["subscriber_lagged", {}, "Session stream is reconnecting."],
     ["subscriber_lagged", { latest_available: 3 }, "Session stream is reconnecting."],
     ["stream_unavailable", {}, "Session stream is reconnecting."],
   ];
@@ -1041,101 +1188,214 @@ test("p0_web_exposes_no_execution_provider_or_arbitrary_route_authority", async 
 });
 
 test("p0_web_controller_model_preserves_generation_sequence_and_e0_boundaries", async () => {
-  const schedules = [
+  const actions = [
     {
-      action: "start-login",
+      name: "authenticate",
+      authenticated: false,
+      method: "POST",
+      path: ROUTES.bootstrap,
+      success: () => [
+        jsonResponse(bootstrap(), 201),
+        jsonResponse(snapshot()),
+        jsonResponse({ state: "logged_out" }),
+      ],
+      wrongSuccess: () => jsonResponse(bootstrap(), 200),
+      invoke: (controller) => controller.authenticate("A".repeat(32)),
+    },
+    {
+      name: "start-login",
+      authenticated: true,
+      method: "POST",
       path: ROUTES.loginDevice,
-      response: jsonResponse(deviceLogin(), 202),
+      success: () => [jsonResponse(deviceLogin(), 202)],
+      wrongSuccess: () => jsonResponse(deviceLogin(), 200),
       invoke: (controller) => controller.startDeviceLogin(),
     },
     {
-      action: "submit-turn",
+      name: "cancel-login",
+      authenticated: true,
+      method: "POST",
+      path: ROUTES.loginCancel,
+      success: () => [jsonResponse({ state: "logged_out" })],
+      wrongSuccess: () => jsonResponse({ state: "logged_out" }, 202),
+      invoke: (controller) => controller.cancelDeviceLogin(),
+    },
+    {
+      name: "submit-turn",
+      authenticated: true,
+      method: "POST",
       path: ROUTES.turns,
-      response: jsonResponse(turnReceipt(), 202),
+      success: () => [jsonResponse(turnReceipt(), 202)],
+      wrongSuccess: () => jsonResponse(turnReceipt(), 200),
       invoke: (controller) => controller.submitPrompt("explicit model prompt"),
     },
     {
-      action: "cancel-turn",
+      name: "cancel-turn",
+      authenticated: true,
+      method: "POST",
       path: ROUTES.turnCancel,
-      response: jsonResponse(snapshot(), 200),
+      success: () => [jsonResponse(snapshot(), 200)],
+      wrongSuccess: () => jsonResponse(snapshot(), 202),
       invoke: (controller) => controller.cancelTurn(),
     },
+    {
+      name: "logout",
+      authenticated: true,
+      method: "DELETE",
+      path: ROUTES.bootstrap,
+      success: () => [new Response(null, { status: 204 })],
+      wrongSuccess: () => new Response(null, { status: 205 }),
+      invoke: (controller) => controller.logout(),
+    },
   ];
-  for (const schedule of schedules) {
+
+  async function prepare(action) {
     const harness = makeHarness();
-    const socket = await load(harness);
-    openStream(socket, 0);
-    harness.queue.push(schedule.response);
-    const explicitActions = [schedule.action];
-    assert.equal(await schedule.invoke(harness.controller), true);
-    socket.peerClose();
-    const mutationLog = harness.requests
-      .filter(({ init }) => init.method === "POST" || init.method === "DELETE")
-      .map(({ path }) => path);
-    assert.deepEqual(mutationLog, [schedule.path]);
-    assert.equal(mutationLog.length, explicitActions.length);
+    if (action.authenticated) {
+      await load(harness);
+    }
+    return harness;
   }
 
-  const logout = makeHarness();
-  await load(logout);
-  logout.queue.push(new Response(null, { status: 204 }));
-  assert.equal(await logout.controller.logout(), true);
-  assertMutationRequest(logout.requests.at(-1), ROUTES.bootstrap, "DELETE");
-  assert.equal(logout.state().authenticated, false);
+  function mutationLog(harness) {
+    return harness.requests
+      .filter(({ init }) => init.method === "POST" || init.method === "DELETE")
+      .map(({ path, init }) => [init.method, path]);
+  }
 
-  const wrongLogout = makeHarness();
-  await load(wrongLogout);
-  wrongLogout.queue.push(
-    new Response(null, { status: 205 }),
+  for (const action of actions) {
+    const success = await prepare(action);
+    success.queue.push(...action.success());
+    assert.equal(await action.invoke(success.controller), true, `${action.name}: success`);
+    assert.deepEqual(mutationLog(success), [[action.method, action.path]]);
+
+    const fixedError = await prepare(action);
+    fixedError.queue.push(errorResponse("service_unavailable", "MODEL ERROR SECRET", 503));
+    assert.equal(await action.invoke(fixedError.controller), false, `${action.name}: error`);
+    assert.deepEqual(mutationLog(fixedError), [[action.method, action.path]]);
+    assert.equal(fixedError.state().error, FIXED.service);
+
+    const wrongSuccess = await prepare(action);
+    wrongSuccess.queue.push(
+      action.wrongSuccess(),
+      jsonResponse(snapshot()),
+      jsonResponse({ state: "logged_out" }),
+    );
+    assert.equal(
+      await action.invoke(wrongSuccess.controller),
+      false,
+      `${action.name}: wrong success status`,
+    );
+    assert.deepEqual(mutationLog(wrongSuccess), [[action.method, action.path]]);
+    assert.equal(wrongSuccess.state().error, FIXED.request);
+
+    for (const outcome of ["network", "redirect"]) {
+      const ambiguous = await prepare(action);
+      ambiguous.queue.push(
+        outcome === "network"
+          ? new Error("MODEL NETWORK SECRET")
+          : new Response(null, { status: 307 }),
+        jsonResponse(snapshot()),
+        jsonResponse({ state: "logged_out" }),
+      );
+      assert.equal(
+        await action.invoke(ambiguous.controller),
+        false,
+        `${action.name}: ${outcome}`,
+      );
+      assert.deepEqual(mutationLog(ambiguous), [[action.method, action.path]]);
+      assert.equal(ambiguous.state().error, FIXED.request);
+    }
+
+    const timeout = await prepare(action);
+    timeout.queue.push(
+      (_path, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener("abort", () =>
+            reject(new Error("MODEL TIMEOUT SECRET")),
+          );
+        }),
+      jsonResponse(snapshot()),
+      jsonResponse({ state: "logged_out" }),
+    );
+    const timedAction = action.invoke(timeout.controller);
+    const overlapping =
+      action.name === "authenticate"
+        ? timeout.controller.submitPrompt("no identity")
+        : timeout.controller.authenticate("B".repeat(32));
+    assert.equal(await overlapping, false, `${action.name}: concurrent gesture`);
+    await timeout.timers.runDelay(15_000);
+    assert.equal(await timedAction, false, `${action.name}: timeout`);
+    assert.deepEqual(mutationLog(timeout), [[action.method, action.path]]);
+
+    const late = await prepare(action);
+    let resolveLate;
+    late.queue.push(
+      () =>
+        new Promise((resolve) => {
+          resolveLate = resolve;
+        }),
+    );
+    const lateAction = action.invoke(late.controller);
+    late.controller.dispose();
+    const statesAfterDispose = late.states.length;
+    resolveLate(action.success()[0]);
+    assert.equal(await lateAction, false, `${action.name}: disposed late success`);
+    assert.equal(late.states.length, statesAfterDispose);
+    assert.deepEqual(mutationLog(late), [[action.method, action.path]]);
+  }
+
+  const lateRefresh = makeHarness();
+  let resolveLogin;
+  lateRefresh.queue.push(
     jsonResponse(snapshot()),
-    jsonResponse({ state: "logged_out" }),
-  );
-  assert.equal(await wrongLogout.controller.logout(), false);
-  assert.equal(
-    wrongLogout.requests.filter(
-      ({ path, init }) => path === ROUTES.bootstrap && init.method === "DELETE",
-    ).length,
-    1,
-  );
-
-  const timeout = makeHarness();
-  await load(timeout);
-  timeout.queue.push(
-    (_path, init) =>
-      new Promise((_resolve, reject) => {
-        init.signal.addEventListener("abort", () => reject(new Error("LATE SECRET")));
-      }),
-    jsonResponse(snapshot()),
-    jsonResponse({ state: "logged_out" }),
-  );
-  const pending = timeout.controller.startDeviceLogin();
-  assert.equal(await timeout.controller.submitPrompt("must not overlap"), false);
-  await timeout.timers.runDelay(15_000);
-  assert.equal(await pending, false);
-  assert.equal(
-    timeout.requests.filter(({ path }) => path === ROUTES.loginDevice).length,
-    1,
-  );
-  assert.equal(timeout.requests.filter(({ path }) => path === ROUTES.turns).length, 0);
-  assert.ok(!JSON.stringify(timeout.states).includes("LATE SECRET"));
-
-  const disposed = makeHarness();
-  await load(disposed);
-  let rejectLate;
-  disposed.queue.push(
-    (_path, init) =>
-      new Promise((_resolve, reject) => {
-        rejectLate = reject;
-        init.signal.addEventListener("abort", () => reject(new Error("DISPOSE SECRET")));
+    () =>
+      new Promise((resolve) => {
+        resolveLogin = resolve;
       }),
   );
-  const late = disposed.controller.cancelTurn();
-  disposed.controller.dispose();
-  rejectLate?.(new Error("DISPOSE SECRET"));
-  assert.equal(await late, false);
-  assert.equal(
-    disposed.requests.filter(({ path }) => path === ROUTES.turnCancel).length,
-    1,
-  );
-  assert.ok(!JSON.stringify(disposed.states).includes("SECRET"));
+  const pendingRefresh = lateRefresh.controller.load();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(lateRefresh.requests.length, 2);
+  lateRefresh.controller.dispose();
+  const refreshStatesAfterDispose = lateRefresh.states.length;
+  resolveLogin(jsonResponse({ state: "logged_in" }));
+  assert.equal(await pendingRefresh, false);
+  assert.equal(lateRefresh.states.length, refreshStatesAfterDispose);
+  assert.equal(lateRefresh.sockets.length, 0);
+
+  const frameSchedules = [
+    (socket) => openStream(socket, 0),
+    (socket) => {
+      socket.open();
+      socket.message(frame({ type: "event", envelope: envelope(1) }));
+    },
+    (socket) => {
+      socket.open();
+      socket.message(
+        frame({
+          type: "error",
+          code: "authentication_expired",
+          message: "MODEL FRAME SECRET",
+        }),
+      );
+    },
+  ];
+  for (const applyFrames of frameSchedules) {
+    const frames = makeHarness();
+    const socket = await load(frames);
+    applyFrames(socket);
+    socket.peerClose();
+    assert.deepEqual(mutationLog(frames), []);
+    assert.ok(!JSON.stringify(frames.states).includes("MODEL FRAME SECRET"));
+  }
+
+  const staleSocket = makeHarness();
+  const oldSocket = await load(staleSocket);
+  staleSocket.queue.push(jsonResponse(snapshot()), jsonResponse({ state: "logged_out" }));
+  assert.equal(await staleSocket.controller.refresh(), true);
+  const stateBeforeStaleFrame = staleSocket.states.at(-1);
+  oldSocket.message(frame({ type: "event", envelope: envelope(1) }));
+  assert.deepEqual(staleSocket.states.at(-1), stateBeforeStaleFrame);
+  assert.deepEqual(mutationLog(staleSocket), []);
 });

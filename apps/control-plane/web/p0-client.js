@@ -134,6 +134,95 @@ const HTTP_CODES = new Set([
   ...REJECTED_CODES,
   ...SERVICE_CODES,
 ]);
+const HTTP_STATUS = new Map([
+  ...["idempotency_key_invalid", "malformed_json"].map((code) => [code, 400]),
+  ["authentication_required", 401],
+  ["origin_forbidden", 403],
+  ...[
+    "instance_changed",
+    "idempotency_conflict",
+    "login_already_running",
+    "already_logged_in",
+    "login_failed",
+    "login_outcome_unknown",
+    "turn_already_running",
+    "no_current_turn",
+    "session_wrong_state",
+    "session_changed",
+    "operation_changed",
+    "history_gap",
+    "future_cursor",
+    "provider_state_conflict",
+    "provider_turn_running",
+    "no_current_operation",
+    "provider_wrong_state",
+    "recovery_decision_stale",
+    "provider_operation_conflict",
+    "provider_outcome_unknown",
+    "provider_recovery_required",
+    "diff_not_ready",
+    "diff_authority_changed",
+    "diff_canceled",
+  ].map((code) => [code, 409]),
+  ["request_too_large", 413],
+  ["unsupported_media_type", 415],
+  ...[
+    "body_not_empty",
+    "invalid_request",
+    "invalid_value",
+    "acknowledgement_required",
+    "task_not_listed",
+  ].map((code) => [code, 422]),
+  ["session_limit", 429],
+  ...[
+    "idempotency_unavailable",
+    "service_unavailable",
+    "login_unavailable",
+    "login_version_mismatch",
+    "login_provider_drift",
+    "login_output_limit",
+    "login_status_unavailable",
+    "login_process_unavailable",
+    "login_state_unavailable",
+    "login_state_invalid",
+    "session_config_invalid",
+    "session_stopped",
+    "subscriber_limit",
+    "session_sequence_exhausted",
+    "provider_scope_unavailable",
+    "provider_busy",
+    "provider_runner_unavailable",
+    "provider_read_unavailable",
+    "provider_state_invalid",
+    "provider_state_unavailable",
+    "diff_scope_unavailable",
+    "diff_busy",
+    "diff_version_mismatch",
+    "diff_boundary_unavailable",
+    "diff_process_unavailable",
+    "diff_output_limit",
+    "diff_provider_drift",
+    "diff_invalid",
+  ].map((code) => [code, 503]),
+  ["diff_timeout", 504],
+]);
+const OPERATION_ERROR_CODES = new Set([
+  "provider_scope_unavailable",
+  "provider_busy",
+  "provider_turn_running",
+  "no_current_operation",
+  "provider_wrong_state",
+  "recovery_decision_stale",
+  "task_not_listed",
+  "acknowledgement_required",
+  "provider_runner_unavailable",
+  "provider_read_unavailable",
+  "provider_operation_conflict",
+  "provider_outcome_unknown",
+  "provider_state_invalid",
+  "provider_state_unavailable",
+  "provider_recovery_required",
+]);
 const WS_CODES = new Set([
   "authentication_expired",
   "subscribe_timeout",
@@ -553,12 +642,17 @@ export function createP0Controller(dependencies) {
   function enterBootstrap(message = MESSAGES.authentication_required) {
     generation += 1;
     cancelReconnect();
+    if (currentAbort) {
+      currentAbort.abort();
+      currentAbort = null;
+    }
     closeSocket("none");
     identity = null;
     lastSeq = 0;
     forceSnapshotCursor = false;
     clearStorage();
     state.authenticated = false;
+    state.busy = false;
     state.connection = "disconnected";
     state.login = "unknown";
     state.session = null;
@@ -752,18 +846,16 @@ export function createP0Controller(dependencies) {
         !exactKeys(value, ["error"]) ||
         !value.error ||
         !HTTP_CODES.has(value.error.code) ||
+        HTTP_STATUS.get(value.error.code) !== response.status ||
         typeof value.error.message !== "string"
       ) {
         throw new Error("error-schema");
       }
-      const errorKeys = Object.keys(value.error);
       if (
         !(
-          (errorKeys.length === 2 && errorKeys.includes("code") && errorKeys.includes("message")) ||
-          (errorKeys.length === 3 &&
-            errorKeys.includes("code") &&
-            errorKeys.includes("message") &&
-            errorKeys.includes("operation_id") &&
+          exactKeys(value.error, ["code", "message"]) ||
+          (OPERATION_ERROR_CODES.has(value.error.code) &&
+            exactKeys(value.error, ["code", "message", "operation_id"]) &&
             isUuid(value.error.operation_id))
         )
       ) {
@@ -831,6 +923,12 @@ export function createP0Controller(dependencies) {
     emit();
   }
 
+  function discardFinishedHttp() {
+    if (currentAbort === null) {
+      state.busy = false;
+    }
+  }
+
   async function handleFailure(result) {
     if (result.disposition === "reauth") {
       enterBootstrap(result.message);
@@ -865,6 +963,10 @@ export function createP0Controller(dependencies) {
       (response) => jsonSuccess(response, validSnapshot),
       "read",
     );
+    if (disposed || generation !== myGeneration) {
+      discardFinishedHttp();
+      return false;
+    }
     if (!sessionResult.ok) {
       endHttp();
       if (sessionResult.disposition === "reauth") {
@@ -874,11 +976,6 @@ export function createP0Controller(dependencies) {
       }
       return false;
     }
-    if (disposed || generation !== myGeneration) {
-      endHttp();
-      return false;
-    }
-
     const snapshot = sessionResult.value;
     const sameStoredIdentity =
       stored &&
@@ -904,6 +1001,10 @@ export function createP0Controller(dependencies) {
       (response) => jsonSuccess(response, validLoginStatus),
       "read",
     );
+    if (disposed || generation !== myGeneration) {
+      discardFinishedHttp();
+      return false;
+    }
     endHttp();
     if (!loginResult.ok) {
       if (loginResult.disposition === "reauth") {
@@ -964,7 +1065,12 @@ export function createP0Controller(dependencies) {
   }
 
   function handleWsError(frame) {
-    if (!exactKeys(frame, expectedWsErrorKeys(frame.code)) || !WS_CODES.has(frame.code) || typeof frame.message !== "string") {
+    const keysAreValid =
+      frame?.code === "subscriber_lagged"
+        ? exactKeys(frame, ["type", "code", "message"]) ||
+          exactKeys(frame, ["type", "code", "message", "latest_available"])
+        : exactKeys(frame, expectedWsErrorKeys(frame?.code));
+    if (!keysAreValid || !WS_CODES.has(frame.code) || typeof frame.message !== "string") {
       streamFailure("terminal", MESSAGES.protocol_error);
       return;
     }
@@ -973,7 +1079,9 @@ export function createP0Controller(dependencies) {
         (!isSeq(frame.oldest_available) ||
           !isSeq(frame.latest_available) ||
           frame.oldest_available > frame.latest_available)) ||
-      ((frame.code === "future_cursor" || frame.code === "subscriber_lagged") &&
+      (frame.code === "future_cursor" && !isSeq(frame.latest_available)) ||
+      (frame.code === "subscriber_lagged" &&
+        "latest_available" in frame &&
         !isSeq(frame.latest_available)) ||
       (frame.code === "unsupported_version" && frame.supported_version !== 1)
     ) {
@@ -1001,7 +1109,7 @@ export function createP0Controller(dependencies) {
     if (code === "history_gap") {
       return ["type", "code", "message", "oldest_available", "latest_available"];
     }
-    if (code === "future_cursor" || code === "subscriber_lagged") {
+    if (code === "future_cursor") {
       return ["type", "code", "message", "latest_available"];
     }
     if (code === "unsupported_version") {
@@ -1202,10 +1310,11 @@ export function createP0Controller(dependencies) {
       (response) => jsonSuccess(response, validBootstrap),
       "mutation",
     );
-    endHttp();
     if (disposed || generation !== myGeneration) {
+      discardFinishedHttp();
       return false;
     }
+    endHttp();
     if (!result.ok) {
       return handleFailure(result);
     }
@@ -1245,14 +1354,15 @@ export function createP0Controller(dependencies) {
       validator,
       "mutation",
     );
-    endHttp();
     if (
       disposed ||
       generation !== myGeneration ||
       identity !== requestIdentity
     ) {
+      discardFinishedHttp();
       return false;
     }
+    endHttp();
     if (!result.ok) {
       return handleFailure(result);
     }
@@ -1345,14 +1455,15 @@ export function createP0Controller(dependencies) {
       async (response) => readBytes(response, DIFF_LIMIT, "text/plain; charset=utf-8"),
       "read",
     );
-    endHttp();
     if (
       disposed ||
       generation !== myGeneration ||
       identity !== requestIdentity
     ) {
+      discardFinishedHttp();
       return false;
     }
+    endHttp();
     if (!result.ok) {
       return handleFailure(result);
     }
@@ -1391,14 +1502,15 @@ export function createP0Controller(dependencies) {
       },
       "mutation",
     );
-    endHttp();
     if (
       disposed ||
       generation !== myGeneration ||
       identity !== requestIdentity
     ) {
+      discardFinishedHttp();
       return false;
     }
+    endHttp();
     if (!result.ok) {
       return handleFailure(result);
     }
@@ -1420,6 +1532,7 @@ export function createP0Controller(dependencies) {
     closeSocket("none");
     identity = null;
     lastSeq = 0;
+    state.busy = false;
     state.device = null;
     state.diff = "";
     state.events = [];
