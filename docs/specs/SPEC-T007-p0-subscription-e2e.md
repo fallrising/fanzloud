@@ -63,17 +63,18 @@ The fixture implements only the pinned invocations:
 |---|---|
 | `--version` | pinned `codex-cli 0.145.0` fixture |
 | `login status` | pinned logged-in ChatGPT status on stderr |
-| `cloud exec` | consumes the exact test prompt on stdin and returns one fixed valid task URL |
+| `cloud exec` | matches the exact prompt as the final argv item and returns one fixed valid task URL |
 | `cloud status` | returns the pinned `READY` status for that exact task |
 | `cloud diff` | returns one fixed valid bounded unified diff for attempt 1 |
 
 All other argv exit with a fixed failure. The exact fixture script contains only shell builtins
-for argument matching, bounded ledger append, stdin comparison, and fixed output; it contains no
+for argument matching, bounded classification-ledger append, and fixed output; it contains no
 network or child-process command and receives no repository path or repository-controlled working
-directory. Its ledger records an allowlisted classification for each invocation, never stdin,
-environment, credentials, or raw output. The test fails unless the ledger contains exactly one
-`cloud exec`, at least one bounded `cloud status`, exactly one `cloud diff`, and no unknown
-invocation, `cloud apply`, or local/repository command.
+directory. It matches but never persists the final prompt argv item, and production stdin remains
+null exactly as required by T004A. Its ledger records an allowlisted command classification for
+each invocation, never argv values, environment, credentials, stdin, or raw output. The test fails
+unless the ledger contains exactly one `cloud exec`, at least one bounded `cloud status`, exactly
+one `cloud diff`, and no unknown invocation, `cloud apply`, or local/repository command.
 
 # Exact Deterministic Flow
 
@@ -128,8 +129,8 @@ fixture, workspace root, home directory, or unresolved variable.
 The credential canary is placed inside the private fake `CODEX_HOME`, but neither the fixture nor
 Codebox reads or projects it; response scans prove its absence. The bootstrap bearer is used once
 on its fixed route, the application cookie remains an HTTP/WebSocket header, and the prompt reaches
-only the accepted turn body and fake CLI stdin. The diff appears only in the explicit diff
-response/assertion.
+only the accepted turn body and the single final `cloud exec` argv item; the classification ledger
+does not persist it. The diff appears only in the explicit diff response/assertion.
 
 The flow contains no request or field for provider, environment, branch, repository, path,
 executable, argv, credential, reconciliation, recovery decision, apply, artifact, or push
