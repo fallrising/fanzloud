@@ -3966,13 +3966,174 @@ async fn p0_composition_secret_and_disconnect_boundaries_hold() {
     assert_eq!(harness.login.counts(), (0, 1, 0, 0));
 }
 
-macro_rules! web_contract_skeleton {
-    ($name:ident) => {
-        #[test]
-        #[ignore = "T006 contract skeleton"]
-        fn $name() {}
-    };
+fn assert_web_security_headers(captured: &Captured, content_type: &str) {
+    assert_eq!(
+        captured
+            .headers
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some(content_type)
+    );
+    assert_eq!(
+        captured
+            .headers
+            .get(CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store")
+    );
+    for (name, expected) in [
+        ("x-content-type-options", "nosniff"),
+        ("referrer-policy", "no-referrer"),
+        ("x-frame-options", "DENY"),
+        ("cross-origin-opener-policy", "same-origin"),
+        ("cross-origin-resource-policy", "same-origin"),
+    ] {
+        assert_eq!(
+            captured.headers.get(name).and_then(|v| v.to_str().ok()),
+            Some(expected),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        captured
+            .headers
+            .get(CONTENT_SECURITY_POLICY)
+            .and_then(|v| v.to_str().ok()),
+        Some(
+            "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' wss://operator.example; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+        )
+    );
 }
 
-web_contract_skeleton!(p0_web_serves_exact_embedded_assets_with_security_headers);
-web_contract_skeleton!(p0_web_rejects_unknown_paths_and_methods_without_filesystem_lookup);
+#[tokio::test]
+async fn p0_web_serves_exact_embedded_assets_with_security_headers() {
+    let harness = harness(300);
+    let assets = [
+        ("/", crate::web::INDEX_HTML, "text/html; charset=utf-8"),
+        (
+            "/assets/p0-app.js",
+            crate::web::APP_JS,
+            "text/javascript; charset=utf-8",
+        ),
+        (
+            "/assets/p0-client.js",
+            crate::web::CLIENT_JS,
+            "text/javascript; charset=utf-8",
+        ),
+        (
+            "/assets/p0.css",
+            crate::web::STYLE_CSS,
+            "text/css; charset=utf-8",
+        ),
+    ];
+
+    for (path, expected, content_type) in assets {
+        let get = send(
+            &harness.router,
+            Request::builder()
+                .method(Method::GET)
+                .uri(path)
+                .body(Body::empty())
+                .expect("static GET"),
+        )
+        .await;
+        assert_eq!(get.status, StatusCode::OK, "{path}");
+        assert_eq!(get.body, expected, "{path}");
+        assert_web_security_headers(&get, content_type);
+
+        let head = send(
+            &harness.router,
+            Request::builder()
+                .method(Method::HEAD)
+                .uri(path)
+                .body(Body::empty())
+                .expect("static HEAD"),
+        )
+        .await;
+        assert_eq!(head.status, StatusCode::OK, "{path}");
+        assert!(head.body.is_empty(), "{path}");
+        assert_web_security_headers(&head, content_type);
+    }
+
+    let html = String::from_utf8_lossy(crate::web::INDEX_HTML);
+    assert!(html.contains(r#"<script type="module" src="/assets/p0-app.js"></script>"#));
+    for forbidden in [
+        "<style",
+        "javascript:",
+        "<iframe",
+        "<object",
+        "<embed",
+        "<base",
+        "<form",
+        "http://",
+        "https://",
+    ] {
+        assert!(!html.contains(forbidden), "{forbidden}");
+    }
+    let scripts = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(crate::web::APP_JS),
+        String::from_utf8_lossy(crate::web::CLIENT_JS)
+    );
+    for forbidden in [
+        "innerHTML",
+        "outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "eval(",
+        "Function(",
+        "import(",
+        "Worker(",
+        "postMessage",
+        "console.",
+        "sendBeacon",
+        "clipboard",
+        "/api/p0/v1/session/reconcile",
+        "/api/p0/v1/session/resolve",
+    ] {
+        assert!(!scripts.contains(forbidden), "{forbidden}");
+    }
+}
+
+#[tokio::test]
+async fn p0_web_rejects_unknown_paths_and_methods_without_filesystem_lookup() {
+    let harness = harness(300);
+    for path in [
+        "/Cargo.toml",
+        "/assets/Cargo.toml",
+        "/assets/p0-client.js/extra",
+        "/assets/%2e%2e/Cargo.toml",
+    ] {
+        let captured = send(
+            &harness.router,
+            Request::builder()
+                .method(Method::GET)
+                .uri(path)
+                .body(Body::empty())
+                .expect("unknown route"),
+        )
+        .await;
+        assert_eq!(captured.status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(json_body(&captured)["error"]["code"], "not_found");
+        assert!(!captured.body.starts_with(b"<!doctype html>"));
+    }
+
+    for (method, path) in [
+        (Method::POST, "/"),
+        (Method::PUT, "/assets/p0-app.js"),
+        (Method::DELETE, "/assets/p0.css"),
+    ] {
+        let captured = send(
+            &harness.router,
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .body(Body::empty())
+                .expect("unsupported static method"),
+        )
+        .await;
+        assert_eq!(captured.status, StatusCode::METHOD_NOT_ALLOWED, "{path}");
+        assert_eq!(json_body(&captured)["error"]["code"], "method_not_allowed");
+        assert!(!captured.body.starts_with(b"<!doctype html>"));
+    }
+}

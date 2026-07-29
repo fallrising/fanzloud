@@ -109,6 +109,10 @@ impl P0PublicOrigin {
         let value = trim_optional_whitespace(value);
         value == self.0.as_bytes()
     }
+
+    pub(crate) fn websocket_origin(&self) -> String {
+        self.0.replacen("https://", "wss://", 1)
+    }
 }
 
 impl fmt::Debug for P0PublicOrigin {

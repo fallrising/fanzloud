@@ -1,18 +1,1141 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const contractSkeletons = [
-  "p0_web_bootstrap_token_is_ephemeral_and_never_persisted",
-  "p0_web_login_status_and_device_actions_use_exact_api_contract",
-  "p0_web_prompt_submission_requires_one_explicit_operator_action",
-  "p0_web_stream_replays_and_reconnects_from_validated_cursor",
-  "p0_web_cancel_is_explicit_and_disconnect_never_cancels",
-  "p0_web_diff_is_bounded_text_and_never_html",
-  "p0_web_refresh_rehydrates_identity_without_replaying_mutations",
-  "p0_web_errors_and_diagnostics_exclude_sensitive_canaries",
-  "p0_web_exposes_no_execution_provider_or_arbitrary_route_authority",
-  "p0_web_controller_model_preserves_generation_sequence_and_e0_boundaries",
-];
+import { mountP0App } from "./p0-app.js";
+import { createP0Controller } from "./p0-client.js";
 
-for (const name of contractSkeletons) {
-  test(name, { skip: "T006 contract skeleton" }, () => {});
+const SESSION_ID = "00000000-0000-0000-0000-000000000001";
+const INSTANCE_ID = "00000000-0000-0000-0000-000000000002";
+const OPERATION_ID = "00000000-0000-0000-0000-000000000003";
+const TURN_ID = "00000000-0000-0000-0000-000000000004";
+const OTHER_SESSION_ID = "00000000-0000-0000-0000-000000000005";
+const KEY = "11111111-1111-4111-8111-111111111111";
+const CURSOR_KEY = "codebox.p0.cursor.v1";
+const JSON_TYPE = "application/json";
+const DIFF_TYPE = "text/plain; charset=utf-8";
+const JSON_LIMIT = 64 * 1024;
+const DIFF_LIMIT = 2 * 1024 * 1024;
+
+const ROUTES = Object.freeze({
+  bootstrap: "/api/p0/v1/operator/session",
+  login: "/api/p0/v1/login",
+  loginDevice: "/api/p0/v1/login/device",
+  loginCancel: "/api/p0/v1/login/cancel",
+  session: "/api/p0/v1/session",
+  turns: "/api/p0/v1/session/turns",
+  turnCancel: "/api/p0/v1/session/cancel",
+  diff: "/api/p0/v1/session/diff",
+  stream: "/api/p0/v1/session/stream",
+});
+
+const FIXED = Object.freeze({
+  authentication: "Authentication is required.",
+  resync: "Current state changed; status was refreshed.",
+  recovery: "Outcome requires the trusted operator recovery procedure.",
+  rejected: "The explicit action was rejected; refresh before deciding whether to act again.",
+  service: "The service could not complete the request; no command was retried.",
+  request: "The request could not be completed safely.",
+  responseLimit: "The response exceeded its safe display limit.",
+  diffLimit: "The diff exceeded its safe display limit.",
+  protocol: "The session stream returned an invalid frame.",
+});
+
+const HTTP_GROUPS = Object.freeze({
+  authentication: ["authentication_required"],
+  resync: [
+    "instance_changed",
+    "session_changed",
+    "history_gap",
+    "future_cursor",
+    "operation_changed",
+    "diff_authority_changed",
+  ],
+  recovery: [
+    "login_outcome_unknown",
+    "provider_outcome_unknown",
+    "provider_recovery_required",
+  ],
+  rejected: [
+    "origin_forbidden",
+    "session_limit",
+    "idempotency_key_invalid",
+    "idempotency_conflict",
+    "unsupported_media_type",
+    "request_too_large",
+    "body_not_empty",
+    "malformed_json",
+    "invalid_request",
+    "invalid_value",
+    "acknowledgement_required",
+    "task_not_listed",
+    "login_already_running",
+    "already_logged_in",
+    "login_failed",
+    "turn_already_running",
+    "no_current_turn",
+    "session_wrong_state",
+    "recovery_decision_stale",
+    "provider_turn_running",
+    "no_current_operation",
+    "provider_wrong_state",
+    "diff_not_ready",
+    "diff_canceled",
+  ],
+  service: [
+    "idempotency_unavailable",
+    "service_unavailable",
+    "login_unavailable",
+    "login_version_mismatch",
+    "login_provider_drift",
+    "login_output_limit",
+    "login_status_unavailable",
+    "login_process_unavailable",
+    "login_state_unavailable",
+    "login_state_invalid",
+    "session_config_invalid",
+    "session_stopped",
+    "subscriber_limit",
+    "session_sequence_exhausted",
+    "provider_state_conflict",
+    "provider_scope_unavailable",
+    "provider_busy",
+    "provider_runner_unavailable",
+    "provider_read_unavailable",
+    "provider_operation_conflict",
+    "provider_state_invalid",
+    "provider_state_unavailable",
+    "diff_scope_unavailable",
+    "diff_busy",
+    "diff_version_mismatch",
+    "diff_boundary_unavailable",
+    "diff_process_unavailable",
+    "diff_timeout",
+    "diff_output_limit",
+    "diff_provider_drift",
+    "diff_invalid",
+  ],
+});
+
+class MemoryStorage {
+  constructor(initial = {}, options = {}) {
+    this.values = new Map(Object.entries(initial));
+    this.failGet = options.failGet ?? false;
+    this.failSet = options.failSet ?? false;
+    this.failRemove = options.failRemove ?? false;
+  }
+
+  getItem(key) {
+    if (this.failGet) {
+      throw new Error("storage canary");
+    }
+    return this.values.has(key) ? this.values.get(key) : null;
+  }
+
+  setItem(key, value) {
+    if (this.failSet) {
+      throw new Error("storage canary");
+    }
+    this.values.set(key, value);
+  }
+
+  removeItem(key) {
+    if (this.failRemove) {
+      throw new Error("storage canary");
+    }
+    this.values.delete(key);
+  }
 }
+
+class FakeTimers {
+  constructor() {
+    this.nextId = 1;
+    this.tasks = new Map();
+  }
+
+  setTimeout(callback, delay) {
+    const id = this.nextId;
+    this.nextId += 1;
+    this.tasks.set(id, { callback, delay });
+    return id;
+  }
+
+  clearTimeout(id) {
+    this.tasks.delete(id);
+  }
+
+  delays() {
+    return [...this.tasks.values()].map(({ delay }) => delay);
+  }
+
+  async runNext() {
+    const next = [...this.tasks.entries()].sort(
+      ([leftId, left], [rightId, right]) => left.delay - right.delay || leftId - rightId,
+    )[0];
+    assert.ok(next, "expected a pending timer");
+    const [id, task] = next;
+    this.tasks.delete(id);
+    await task.callback();
+  }
+
+  async runDelay(delay) {
+    const next = [...this.tasks.entries()].find(([, task]) => task.delay === delay);
+    assert.ok(next, `expected ${delay}ms timer`);
+    const [id, task] = next;
+    this.tasks.delete(id);
+    await task.callback();
+  }
+}
+
+class FakeSocket {
+  constructor(url) {
+    this.url = url;
+    this.sent = [];
+    this.closeCalls = [];
+    this.onopen = null;
+    this.onmessage = null;
+    this.onerror = null;
+    this.onclose = null;
+  }
+
+  open() {
+    this.onopen?.();
+  }
+
+  send(value) {
+    this.sent.push(value);
+  }
+
+  message(value) {
+    this.onmessage?.({ data: value });
+  }
+
+  close(code, reason) {
+    this.closeCalls.push({ code, reason });
+  }
+
+  peerClose(code = 1006, reason = "SECRET CLOSE CANARY") {
+    this.onclose?.({ code, reason });
+  }
+}
+
+function jsonResponse(value, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": JSON_TYPE, ...extraHeaders },
+  });
+}
+
+function bytesResponse(chunks, options = {}) {
+  let canceled = false;
+  let index = 0;
+  const stream = new ReadableStream(
+    {
+      pull(controller) {
+        if (index === chunks.length) {
+          controller.close();
+          return;
+        }
+        const chunk = chunks[index];
+        index += 1;
+        if (chunk instanceof Error) {
+          controller.error(chunk);
+        } else {
+          controller.enqueue(chunk);
+        }
+      },
+      cancel() {
+        canceled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const response = new Response(stream, {
+    status: options.status ?? 200,
+    headers: {
+      "content-type": options.contentType ?? DIFF_TYPE,
+      ...(options.contentLength === undefined
+        ? {}
+        : { "content-length": String(options.contentLength) }),
+    },
+  });
+  return { response, wasCanceled: () => canceled };
+}
+
+function errorResponse(code, message = "UNTRUSTED ERROR CANARY", status = 400) {
+  return jsonResponse({ error: { code, message } }, status);
+}
+
+function snapshot(highWater = 0, options = {}) {
+  return {
+    identity: {
+      session_id: options.sessionId ?? SESSION_ID,
+      instance_id: options.instanceId ?? INSTANCE_ID,
+    },
+    state: options.state ?? "ready",
+    current_turn: options.currentTurn ?? null,
+    high_water_seq: highWater,
+  };
+}
+
+function bootstrap() {
+  return {
+    actor: "operator",
+    expires_in_seconds: 300,
+    p0_session_id: SESSION_ID,
+    instance_id: INSTANCE_ID,
+  };
+}
+
+function deviceLogin() {
+  return {
+    operation_id: OPERATION_ID,
+    verification_url: "https://auth.openai.com/codex/device",
+    verification_code: "AB12-CDE34",
+    expires_in_seconds: 900,
+  };
+}
+
+function turnReceipt(highWater = 0) {
+  return { turn_id: TURN_ID, high_water_seq: highWater };
+}
+
+function envelope(seq, type = "turn_accepted", options = {}) {
+  return {
+    schema_version: 1,
+    session_id: options.sessionId ?? SESSION_ID,
+    seq,
+    turn_id: options.turnId ?? TURN_ID,
+    payload: options.payload ?? { type },
+  };
+}
+
+function frame(value) {
+  return JSON.stringify(value);
+}
+
+function cursor(sessionId = SESSION_ID, eventSeq = 0, instanceId = INSTANCE_ID) {
+  return JSON.stringify({
+    schema_version: 1,
+    instance_id: instanceId,
+    session_id: sessionId,
+    event_seq: eventSeq,
+  });
+}
+
+function makeHarness(options = {}) {
+  const queue = [];
+  const requests = [];
+  const sockets = [];
+  const states = [];
+  const timers = options.timers ?? new FakeTimers();
+  const storage = options.storage ?? new MemoryStorage();
+  let uuidCounter = 0;
+
+  async function fetchRequest(path, init) {
+    requests.push({ path, init });
+    assert.ok(queue.length > 0, `unexpected request ${init.method} ${path}`);
+    const action = queue.shift();
+    if (action instanceof Error) {
+      throw action;
+    }
+    return typeof action === "function" ? action(path, init) : action;
+  }
+
+  const controller = createP0Controller({
+    fetch: fetchRequest,
+    createWebSocket: (url) => {
+      const socket = new FakeSocket(url);
+      sockets.push(socket);
+      return socket;
+    },
+    randomUUID: () => {
+      uuidCounter += 1;
+      return uuidCounter === 1
+        ? KEY
+        : `22222222-2222-4222-8222-${String(uuidCounter).padStart(12, "0")}`;
+    },
+    storage,
+    setTimeout: timers.setTimeout.bind(timers),
+    clearTimeout: timers.clearTimeout.bind(timers),
+    location: { origin: "https://operator.example" },
+    AbortController,
+    TextEncoder,
+    TextDecoder,
+    publish: (state) => states.push(state),
+  });
+
+  return {
+    controller,
+    queue,
+    requests,
+    sockets,
+    states,
+    timers,
+    storage,
+    state: () => states.at(-1),
+  };
+}
+
+async function load(harness, acceptedSnapshot = snapshot(), login = { state: "logged_out" }) {
+  harness.queue.push(jsonResponse(acceptedSnapshot), jsonResponse(login));
+  assert.equal(await harness.controller.load(), true);
+  assert.equal(harness.queue.length, 0);
+  return harness.sockets.at(-1);
+}
+
+function requestHeaders(request) {
+  return new Headers(request.init.headers);
+}
+
+function assertMutationRequest(request, path, method = "POST") {
+  assert.equal(request.path, path);
+  assert.equal(request.init.method, method);
+  assert.equal(request.init.cache, "no-store");
+  assert.equal(request.init.credentials, "same-origin");
+  assert.equal(request.init.mode, "same-origin");
+  assert.equal(request.init.redirect, "error");
+  assert.equal(request.init.referrerPolicy, "no-referrer");
+  assert.equal(requestHeaders(request).get("codebox-instance-id"), INSTANCE_ID);
+  assert.match(
+    requestHeaders(request).get("idempotency-key"),
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
+}
+
+function openStream(socket, afterSeq, acceptedSnapshot = snapshot(afterSeq)) {
+  assert.equal(socket.url, `wss://operator.example${ROUTES.stream}`);
+  socket.open();
+  assert.deepEqual(JSON.parse(socket.sent[0]), {
+    type: "subscribe",
+    protocol_version: 1,
+    session_id: SESSION_ID,
+    after_seq: afterSeq,
+  });
+  socket.message(
+    frame({
+      type: "replay_begin",
+      session_id: SESSION_ID,
+      after_seq: afterSeq,
+      high_water_seq: acceptedSnapshot.high_water_seq,
+    }),
+  );
+  socket.message(
+    frame({
+      type: "snapshot",
+      snapshot: acceptedSnapshot,
+      high_water_seq: acceptedSnapshot.high_water_seq,
+    }),
+  );
+  socket.message(
+    frame({
+      type: "replay_end",
+      session_id: SESSION_ID,
+      high_water_seq: acceptedSnapshot.high_water_seq,
+    }),
+  );
+}
+
+test("p0_web_bootstrap_token_is_ephemeral_and_never_persisted", async () => {
+  const harness = makeHarness();
+  const token = "é".repeat(16);
+  harness.queue.push(
+    jsonResponse(bootstrap(), 201),
+    jsonResponse(snapshot()),
+    jsonResponse({ state: "logged_out" }),
+  );
+
+  assert.equal(await harness.controller.authenticate(token), true);
+  assert.equal(harness.requests.filter(({ path }) => path === ROUTES.bootstrap).length, 1);
+  const authorization = requestHeaders(harness.requests[0]).get("authorization");
+  assert.ok(authorization.startsWith("Bearer "));
+  assert.deepEqual(
+    [...authorization.slice(7)].map((character) => character.charCodeAt(0)),
+    [...new TextEncoder().encode(token)],
+  );
+  assert.equal(harness.requests[0].path, ROUTES.bootstrap);
+  assert.equal(harness.requests[0].init.method, "POST");
+  assert.equal(harness.requests[0].init.redirect, "error");
+  assert.ok(!JSON.stringify([...harness.storage.values]).includes(token));
+  assert.ok(!JSON.stringify(harness.states).includes(token));
+  assert.ok(!harness.sockets[0].url.includes(token));
+
+  for (const invalid of [
+    "short",
+    "x".repeat(31),
+    "x".repeat(129),
+    `${"x".repeat(31)}\u007f`,
+    `${"x".repeat(31)}\ud800`,
+  ]) {
+    assert.equal(await harness.controller.authenticate(invalid), false);
+  }
+  assert.equal(harness.requests.filter(({ path }) => path === ROUTES.bootstrap).length, 1);
+
+  const wrongStatus = makeHarness();
+  wrongStatus.queue.push(
+    jsonResponse(bootstrap(), 200),
+    errorResponse("authentication_required", "SECRET"),
+  );
+  assert.equal(await wrongStatus.controller.authenticate("x".repeat(32)), false);
+  assert.equal(
+    wrongStatus.requests.filter(({ path }) => path === ROUTES.bootstrap).length,
+    1,
+  );
+  assert.ok(!JSON.stringify(wrongStatus.states).includes("SECRET"));
+});
+
+test("p0_web_login_status_and_device_actions_use_exact_api_contract", async () => {
+  const harness = makeHarness();
+  await load(harness, snapshot(), { state: "logged_out" });
+  assert.deepEqual(
+    harness.requests.slice(0, 2).map(({ path, init }) => [init.method, path]),
+    [
+      ["GET", ROUTES.session],
+      ["GET", ROUTES.login],
+    ],
+  );
+
+  harness.queue.push(jsonResponse(deviceLogin(), 202));
+  assert.equal(await harness.controller.startDeviceLogin(), true);
+  const start = harness.requests.at(-1);
+  assertMutationRequest(start, ROUTES.loginDevice);
+  assert.equal(start.init.body, undefined);
+  assert.equal(requestHeaders(start).has("content-type"), false);
+  assert.equal(harness.state().device.verificationCode, "AB12-CDE34");
+
+  harness.queue.push(jsonResponse({ state: "logged_out" }));
+  assert.equal(await harness.controller.cancelDeviceLogin(), true);
+  const cancel = harness.requests.at(-1);
+  assertMutationRequest(cancel, ROUTES.loginCancel);
+  assert.equal(harness.state().device, null);
+
+  harness.queue.push(
+    jsonResponse(deviceLogin(), 200),
+    jsonResponse(snapshot()),
+    jsonResponse({ state: "logged_out" }),
+  );
+  assert.equal(await harness.controller.startDeviceLogin(), false);
+  assert.equal(
+    harness.requests.filter(({ path }) => path === ROUTES.loginDevice).length,
+    2,
+  );
+});
+
+test("p0_web_prompt_submission_requires_one_explicit_operator_action", async () => {
+  const harness = makeHarness();
+  await load(harness);
+  const before = harness.requests.length;
+  for (const invalid of [
+    "",
+    "-",
+    " \n\t ",
+    "unsafe\u0000prompt",
+    "unsafe\u007fprompt",
+    "x".repeat(32 * 1024 + 1),
+  ]) {
+    assert.equal(await harness.controller.submitPrompt(invalid), false);
+  }
+  assert.equal(harness.requests.length, before);
+
+  const prompt = "One explicit operation ✅";
+  harness.queue.push(jsonResponse(turnReceipt(), 202));
+  assert.equal(await harness.controller.submitPrompt(prompt), true);
+  const accepted = harness.requests.at(-1);
+  assertMutationRequest(accepted, ROUTES.turns);
+  assert.equal(requestHeaders(accepted).get("content-type"), JSON_TYPE);
+  assert.equal(accepted.init.body, JSON.stringify({ prompt }));
+  assert.equal(harness.requests.filter(({ path }) => path === ROUTES.turns).length, 1);
+
+  harness.queue.push(
+    jsonResponse(turnReceipt(), 200),
+    jsonResponse(snapshot()),
+    jsonResponse({ state: "logged_out" }),
+  );
+  assert.equal(await harness.controller.submitPrompt("second action"), false);
+  assert.equal(harness.requests.filter(({ path }) => path === ROUTES.turns).length, 2);
+});
+
+test("p0_web_stream_replays_and_reconnects_from_validated_cursor", async () => {
+  const storage = new MemoryStorage({ [CURSOR_KEY]: cursor(SESSION_ID, 2) });
+  const harness = makeHarness({ storage });
+  const first = await load(harness, snapshot(4));
+  first.open();
+  assert.equal(JSON.parse(first.sent[0]).after_seq, 2);
+  first.message(
+    frame({
+      type: "replay_begin",
+      session_id: SESSION_ID,
+      after_seq: 2,
+      high_water_seq: 4,
+    }),
+  );
+  first.message(frame({ type: "event", envelope: envelope(2) }));
+  first.message(frame({ type: "event", envelope: envelope(3) }));
+  first.message(frame({ type: "event", envelope: envelope(4, "lifecycle_changed", {
+    payload: {
+      type: "lifecycle_changed",
+      lifecycle: { state: "pending", operation_id: OPERATION_ID, task_id: "task_1" },
+    },
+  }) }));
+  first.message(frame({ type: "snapshot", snapshot: snapshot(4), high_water_seq: 4 }));
+  first.message(
+    frame({ type: "replay_end", session_id: SESSION_ID, high_water_seq: 4 }),
+  );
+  first.message(frame({ type: "event", envelope: envelope(5) }));
+  assert.equal(harness.state().connection, "connected");
+  assert.deepEqual(harness.state().events.map(({ seq }) => seq), [3, 4, 5]);
+  assert.equal(JSON.parse(storage.getItem(CURSOR_KEY)).event_seq, 5);
+
+  first.message(frame({ type: "event", envelope: envelope(7) }));
+  assert.deepEqual(first.closeCalls.at(-1), { code: 1008, reason: "" });
+  first.peerClose(1008);
+  assert.deepEqual(harness.timers.delays(), [250]);
+  harness.queue.push(jsonResponse(snapshot(7)), jsonResponse({ state: "logged_out" }));
+  await harness.timers.runNext();
+  const second = harness.sockets.at(-1);
+  second.open();
+  assert.equal(JSON.parse(second.sent[0]).after_seq, 7);
+  second.message(
+    frame({
+      type: "error",
+      code: "history_gap",
+      message: "SECRET HISTORY CANARY",
+      oldest_available: 9,
+      latest_available: 10,
+    }),
+  );
+  assert.deepEqual(second.closeCalls.at(-1), { code: 1008, reason: "" });
+  second.peerClose(1008);
+  assert.deepEqual(harness.timers.delays(), [500]);
+  harness.queue.push(jsonResponse(snapshot(10)), jsonResponse({ state: "logged_out" }));
+  await harness.timers.runNext();
+  const third = harness.sockets.at(-1);
+  third.open();
+  assert.equal(JSON.parse(third.sent[0]).after_seq, 10);
+  assert.ok(!JSON.stringify(harness.states).includes("SECRET HISTORY CANARY"));
+
+  const exactFrameHarness = makeHarness();
+  const exactFrameSocket = await load(exactFrameHarness);
+  exactFrameSocket.open();
+  const emptyError = frame({
+    type: "error",
+    code: "stream_unavailable",
+    message: "",
+  });
+  const exactFrame = frame({
+    type: "error",
+    code: "stream_unavailable",
+    message: "x".repeat(JSON_LIMIT - emptyError.length),
+  });
+  assert.equal(new TextEncoder().encode(exactFrame).length, JSON_LIMIT);
+  exactFrameSocket.message(exactFrame);
+  assert.equal(exactFrameHarness.state().error, "Session stream is reconnecting.");
+
+  const failingStorage = new MemoryStorage({}, { failSet: true });
+  const storageHarness = makeHarness({ storage: failingStorage });
+  const storageSocket = await load(storageHarness, snapshot(3));
+  openStream(storageSocket, 3, snapshot(3));
+  storageSocket.peerClose();
+  storageHarness.queue.push(
+    jsonResponse(snapshot(4)),
+    jsonResponse({ state: "logged_out" }),
+  );
+  await storageHarness.timers.runNext();
+  storageHarness.sockets.at(-1).open();
+  assert.equal(JSON.parse(storageHarness.sockets.at(-1).sent[0]).after_seq, 4);
+
+  for (const invalid of [
+    new Uint8Array([1]),
+    "{",
+    frame({ type: "unknown" }),
+    frame({ type: "event", envelope: envelope(1) }),
+    frame({ type: "snapshot", snapshot: snapshot(), high_water_seq: 0 }),
+    frame({
+      type: "replay_begin",
+      session_id: SESSION_ID,
+      after_seq: 0,
+      high_water_seq: 0,
+      unknown: true,
+    }),
+    "x".repeat(JSON_LIMIT + 1),
+  ]) {
+    const invalidHarness = makeHarness();
+    const invalidSocket = await load(invalidHarness);
+    invalidSocket.open();
+    invalidSocket.message(invalid);
+    assert.deepEqual(invalidSocket.closeCalls.at(-1), { code: 1008, reason: "" });
+    assert.equal(invalidHarness.state().error, FIXED.protocol);
+  }
+});
+
+test("p0_web_cancel_is_explicit_and_disconnect_never_cancels", async () => {
+  const harness = makeHarness();
+  const socket = await load(harness);
+  socket.open();
+  socket.peerClose();
+  assert.equal(harness.requests.filter(({ path }) => path === ROUTES.turnCancel).length, 0);
+
+  harness.queue.push(jsonResponse(snapshot(), 200));
+  assert.equal(await harness.controller.cancelTurn(), true);
+  assertMutationRequest(harness.requests.at(-1), ROUTES.turnCancel);
+  assert.equal(harness.requests.filter(({ path }) => path === ROUTES.turnCancel).length, 1);
+  harness.controller.dispose();
+  assert.equal(harness.requests.filter(({ path }) => path === ROUTES.turnCancel).length, 1);
+
+  const ambiguous = makeHarness();
+  await load(ambiguous);
+  ambiguous.queue.push(
+    new Error("SECRET NETWORK CANARY"),
+    jsonResponse(snapshot()),
+    jsonResponse({ state: "logged_out" }),
+  );
+  assert.equal(await ambiguous.controller.cancelTurn(), false);
+  assert.equal(
+    ambiguous.requests.filter(({ path }) => path === ROUTES.turnCancel).length,
+    1,
+  );
+  assert.ok(!JSON.stringify(ambiguous.states).includes("SECRET NETWORK CANARY"));
+});
+
+test("p0_web_diff_is_bounded_text_and_never_html", async () => {
+  const harness = makeHarness();
+  await load(harness);
+  const canary = "diff --git a/x b/x\n+<script>DIFF SECRET</script>\n";
+  harness.queue.push(new Response(canary, { headers: { "content-type": DIFF_TYPE } }));
+  assert.equal(await harness.controller.showDiff(), true);
+  assert.equal(harness.state().diff, canary);
+
+  const exact = bytesResponse([
+    new Uint8Array(DIFF_LIMIT / 2).fill(97),
+    new Uint8Array(DIFF_LIMIT / 2).fill(98),
+  ]);
+  harness.queue.push(exact.response);
+  assert.equal(await harness.controller.showDiff(), true);
+  assert.equal(harness.state().diff.length, DIFF_LIMIT);
+
+  const overflow = bytesResponse([
+    new Uint8Array(DIFF_LIMIT).fill(97),
+    new Uint8Array([98]),
+  ]);
+  harness.queue.push(overflow.response);
+  assert.equal(await harness.controller.showDiff(), false);
+  assert.equal(harness.state().diff, "");
+  assert.equal(harness.state().error, FIXED.diffLimit);
+  assert.equal(overflow.wasCanceled(), true);
+
+  const contentLength = bytesResponse([new Uint8Array([97])], {
+    contentLength: DIFF_LIMIT + 1,
+  });
+  harness.queue.push(contentLength.response);
+  assert.equal(await harness.controller.showDiff(), false);
+  assert.equal(harness.state().error, FIXED.diffLimit);
+
+  const invalidUtf8 = bytesResponse([new Uint8Array([0xff])]);
+  harness.queue.push(invalidUtf8.response);
+  assert.equal(await harness.controller.showDiff(), false);
+  assert.equal(harness.state().error, FIXED.request);
+
+  const failedChunk = bytesResponse([
+    new TextEncoder().encode("partial secret"),
+    new Error("SECRET BODY CANARY"),
+  ]);
+  harness.queue.push(failedChunk.response);
+  assert.equal(await harness.controller.showDiff(), false);
+  assert.equal(harness.state().diff, "");
+
+  harness.queue.push(
+    new Response("plain", { headers: { "content-type": "text/plain" } }),
+    new Response("plain", { status: 201, headers: { "content-type": DIFF_TYPE } }),
+  );
+  assert.equal(await harness.controller.showDiff(), false);
+  assert.equal(await harness.controller.showDiff(), false);
+  assert.ok(!JSON.stringify(harness.states).includes("SECRET BODY CANARY"));
+});
+
+test("p0_web_refresh_rehydrates_identity_without_replaying_mutations", async () => {
+  const harness = makeHarness();
+  const first = await load(harness, snapshot(5));
+  first.open();
+  assert.equal(JSON.parse(first.sent[0]).after_seq, 5);
+  assert.deepEqual(
+    harness.requests.map(({ path, init }) => [init.method, path]),
+    [
+      ["GET", ROUTES.session],
+      ["GET", ROUTES.login],
+    ],
+  );
+
+  harness.queue.push(jsonResponse(snapshot(5)), jsonResponse({ state: "logged_out" }));
+  assert.equal(await harness.controller.refresh(), true);
+  harness.sockets.at(-1).open();
+  assert.equal(JSON.parse(harness.sockets.at(-1).sent[0]).after_seq, 5);
+  assert.equal(
+    harness.requests.filter(({ init }) => init.method !== "GET").length,
+    0,
+  );
+
+  for (const stored of [
+    cursor(OTHER_SESSION_ID, 2),
+    cursor(SESSION_ID, 99),
+    "{",
+  ]) {
+    const partition = makeHarness({
+      storage: new MemoryStorage({ [CURSOR_KEY]: stored }),
+    });
+    const socket = await load(partition, snapshot(8));
+    socket.open();
+    assert.equal(JSON.parse(socket.sent[0]).after_seq, 8);
+  }
+
+  harness.queue.push(errorResponse("authentication_required", "COOKIE SECRET", 401));
+  assert.equal(await harness.controller.refresh(), false);
+  assert.equal(harness.state().authenticated, false);
+  assert.equal(harness.storage.getItem(CURSOR_KEY), null);
+  assert.equal(harness.state().error, FIXED.authentication);
+  assert.ok(!JSON.stringify(harness.states).includes("COOKIE SECRET"));
+});
+
+test("p0_web_errors_and_diagnostics_exclude_sensitive_canaries", async () => {
+  const expectedMessages = {
+    authentication: FIXED.authentication,
+    resync: FIXED.resync,
+    recovery: FIXED.recovery,
+    rejected: FIXED.rejected,
+    service: FIXED.service,
+  };
+  for (const [group, codes] of Object.entries(HTTP_GROUPS)) {
+    for (const code of codes) {
+      const harness = makeHarness();
+      await load(harness);
+      harness.queue.push(errorResponse(code));
+      if (group === "resync") {
+        harness.queue.push(jsonResponse(snapshot()), jsonResponse({ state: "logged_out" }));
+      }
+      assert.equal(await harness.controller.showDiff(), false, code);
+      assert.equal(harness.state().error, expectedMessages[group], code);
+      assert.ok(!JSON.stringify(harness.states).includes("UNTRUSTED ERROR CANARY"), code);
+    }
+  }
+
+  const jsonPrefix = '{"error":{"code":"diff_not_ready","message":"';
+  const jsonSuffix = '"}}';
+  const exactJsonBytes = new TextEncoder().encode(
+    `${jsonPrefix}${"x".repeat(JSON_LIMIT - jsonPrefix.length - jsonSuffix.length)}${jsonSuffix}`,
+  );
+  assert.equal(exactJsonBytes.byteLength, JSON_LIMIT);
+  const jsonBounds = makeHarness();
+  await load(jsonBounds);
+  const exactJson = bytesResponse(
+    [exactJsonBytes.slice(0, 123), exactJsonBytes.slice(123)],
+    { status: 400, contentType: JSON_TYPE },
+  );
+  jsonBounds.queue.push(exactJson.response);
+  assert.equal(await jsonBounds.controller.showDiff(), false);
+  assert.equal(jsonBounds.state().error, FIXED.rejected);
+
+  const overJsonBytes = new TextEncoder().encode(
+    `${jsonPrefix}${"x".repeat(JSON_LIMIT + 1 - jsonPrefix.length - jsonSuffix.length)}${jsonSuffix}`,
+  );
+  const overJson = bytesResponse(
+    [overJsonBytes.slice(0, JSON_LIMIT), overJsonBytes.slice(JSON_LIMIT)],
+    { status: 400, contentType: JSON_TYPE },
+  );
+  jsonBounds.queue.push(overJson.response);
+  assert.equal(await jsonBounds.controller.showDiff(), false);
+  assert.equal(jsonBounds.state().error, FIXED.responseLimit);
+  assert.equal(overJson.wasCanceled(), true);
+
+  const unicodeJsonBytes = new TextEncoder().encode(
+    JSON.stringify({
+      error: { code: "diff_not_ready", message: "é".repeat(33_000) },
+    }),
+  );
+  assert.ok(new TextDecoder().decode(unicodeJsonBytes).length < JSON_LIMIT);
+  assert.ok(unicodeJsonBytes.byteLength > JSON_LIMIT);
+  const unicodeJson = bytesResponse([unicodeJsonBytes], {
+    status: 400,
+    contentType: JSON_TYPE,
+  });
+  jsonBounds.queue.push(unicodeJson.response);
+  assert.equal(await jsonBounds.controller.showDiff(), false);
+  assert.equal(jsonBounds.state().error, FIXED.responseLimit);
+
+  const wsCases = [
+    ["authentication_expired", {}, FIXED.authentication],
+    ["subscribe_timeout", {}, "Session stream is reconnecting."],
+    ["protocol_error", {}, FIXED.protocol],
+    ["unsupported_version", { supported_version: 1 }, FIXED.protocol],
+    ["wrong_session", {}, FIXED.resync],
+    [
+      "history_gap",
+      { oldest_available: 2, latest_available: 3 },
+      FIXED.resync,
+    ],
+    ["future_cursor", { latest_available: 3 }, FIXED.resync],
+    ["subscriber_limit", {}, "Session stream is reconnecting."],
+    ["subscriber_lagged", { latest_available: 3 }, "Session stream is reconnecting."],
+    ["stream_unavailable", {}, "Session stream is reconnecting."],
+  ];
+  for (const [code, details, expected] of wsCases) {
+    const harness = makeHarness();
+    const socket = await load(harness);
+    socket.open();
+    socket.message(
+      frame({ type: "error", code, message: "WS SECRET CANARY", ...details }),
+    );
+    assert.equal(harness.state().error, expected, code);
+    assert.ok(!JSON.stringify(harness.states).includes("WS SECRET CANARY"), code);
+  }
+
+  for (const status of [301, 302, 303, 307, 308]) {
+    const harness = makeHarness();
+    await load(harness);
+    harness.queue.push(new Response(null, { status }));
+    assert.equal(await harness.controller.showDiff(), false);
+    assert.equal(harness.requests.at(-1).init.redirect, "error");
+    assert.equal(harness.state().error, FIXED.request);
+  }
+
+  const unknown = makeHarness();
+  await load(unknown);
+  unknown.queue.push(errorResponse("SECRET_UNKNOWN_CODE", "SECRET UNKNOWN BODY"));
+  assert.equal(await unknown.controller.showDiff(), false);
+  assert.equal(unknown.state().error, FIXED.request);
+  assert.ok(!JSON.stringify(unknown.states).includes("SECRET"));
+});
+
+class FakeElement {
+  constructor() {
+    this.textContent = "";
+    this.value = "";
+    this.hidden = false;
+    this.disabled = false;
+    this.listeners = new Map();
+  }
+
+  addEventListener(type, listener) {
+    this.listeners.set(type, listener);
+  }
+
+  async dispatch(type) {
+    const listener = this.listeners.get(type);
+    assert.ok(listener, `missing ${type} listener`);
+    await listener();
+  }
+}
+
+test("p0_web_exposes_no_execution_provider_or_arbitrary_route_authority", async () => {
+  const [clientSource, appSource, html] = await Promise.all([
+    readFile(new URL("./p0-client.js", import.meta.url), "utf8"),
+    readFile(new URL("./p0-app.js", import.meta.url), "utf8"),
+    readFile(new URL("./index.html", import.meta.url), "utf8"),
+  ]);
+  const source = `${clientSource}\n${appSource}`;
+  for (const forbidden of [
+    "innerHTML",
+    "outerHTML",
+    "insertAdjacentHTML",
+    "document.write",
+    "eval(",
+    "Function(",
+    "import(",
+    "Worker(",
+    "postMessage",
+    "console.",
+    "sendBeacon",
+    "clipboard",
+    "/api/p0/v1/session/reconcile",
+    "/api/p0/v1/session/resolve",
+    "window.location.search",
+    "window.location.hash",
+  ]) {
+    assert.equal(source.includes(forbidden), false, forbidden);
+  }
+  for (const forbiddenInput of ["repository", "provider", "execution", "path", "task-id"]) {
+    assert.equal(html.includes(`id="${forbiddenInput}"`), false, forbiddenInput);
+  }
+  const routeLiterals = new Set(
+    [...clientSource.matchAll(/"\/api\/p0\/v1\/[^"]+"/g)].map((match) =>
+      match[0].slice(1, -1),
+    ),
+  );
+  assert.deepEqual(routeLiterals, new Set(Object.values(ROUTES)));
+
+  const ids = [
+    "connection-status",
+    "bootstrap-panel",
+    "bootstrap-token",
+    "authenticate",
+    "operator-panel",
+    "session-status",
+    "refresh",
+    "login-status",
+    "start-login",
+    "cancel-login",
+    "verification-url",
+    "verification-code",
+    "prompt",
+    "submit-turn",
+    "cancel-turn",
+    "stream-status",
+    "event-list",
+    "show-diff",
+    "diff-output",
+    "logout",
+    "error-message",
+  ];
+  const elements = new Map(ids.map((id) => [id, new FakeElement()]));
+  const storage = new MemoryStorage();
+  const timers = new FakeTimers();
+  const queue = [errorResponse("authentication_required", "INITIAL SECRET", 401)];
+  const requests = [];
+  const sockets = [];
+  class BrowserSocket {
+    constructor(url) {
+      const socket = new FakeSocket(url);
+      sockets.push(socket);
+      return socket;
+    }
+  }
+  const environment = {
+    document: { getElementById: (id) => elements.get(id) ?? null },
+    async fetch(path, init) {
+      requests.push({ path, init });
+      return queue.shift();
+    },
+    WebSocket: BrowserSocket,
+    crypto: { randomUUID: () => KEY },
+    sessionStorage: storage,
+    setTimeout: timers.setTimeout.bind(timers),
+    clearTimeout: timers.clearTimeout.bind(timers),
+    location: { origin: "https://operator.example" },
+    AbortController,
+    TextEncoder,
+    TextDecoder,
+    addEventListener() {},
+  };
+  const controller = mountP0App(environment);
+  assert.ok(controller);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const token = "B".repeat(32);
+  elements.get("bootstrap-token").value = token;
+  queue.push(
+    jsonResponse(bootstrap(), 201),
+    jsonResponse(snapshot()),
+    jsonResponse({ state: "logged_out" }),
+  );
+  await elements.get("authenticate").dispatch("click");
+  assert.equal(elements.get("bootstrap-token").value, "");
+  assert.ok(!JSON.stringify([...storage.values]).includes(token));
+
+  const prompt = "PROMPT DOM SECRET";
+  elements.get("prompt").value = prompt;
+  queue.push(jsonResponse(turnReceipt(), 202));
+  await elements.get("submit-turn").dispatch("click");
+  assert.equal(elements.get("prompt").value, "");
+  assert.equal(requests.at(-1).init.body, JSON.stringify({ prompt }));
+  assert.equal(elements.get("diff-output").textContent, "No diff loaded.");
+  assert.equal(elements.get("verification-url").textContent, "");
+  controller.dispose();
+});
+
+test("p0_web_controller_model_preserves_generation_sequence_and_e0_boundaries", async () => {
+  const schedules = [
+    {
+      action: "start-login",
+      path: ROUTES.loginDevice,
+      response: jsonResponse(deviceLogin(), 202),
+      invoke: (controller) => controller.startDeviceLogin(),
+    },
+    {
+      action: "submit-turn",
+      path: ROUTES.turns,
+      response: jsonResponse(turnReceipt(), 202),
+      invoke: (controller) => controller.submitPrompt("explicit model prompt"),
+    },
+    {
+      action: "cancel-turn",
+      path: ROUTES.turnCancel,
+      response: jsonResponse(snapshot(), 200),
+      invoke: (controller) => controller.cancelTurn(),
+    },
+  ];
+  for (const schedule of schedules) {
+    const harness = makeHarness();
+    const socket = await load(harness);
+    openStream(socket, 0);
+    harness.queue.push(schedule.response);
+    const explicitActions = [schedule.action];
+    assert.equal(await schedule.invoke(harness.controller), true);
+    socket.peerClose();
+    const mutationLog = harness.requests
+      .filter(({ init }) => init.method === "POST" || init.method === "DELETE")
+      .map(({ path }) => path);
+    assert.deepEqual(mutationLog, [schedule.path]);
+    assert.equal(mutationLog.length, explicitActions.length);
+  }
+
+  const logout = makeHarness();
+  await load(logout);
+  logout.queue.push(new Response(null, { status: 204 }));
+  assert.equal(await logout.controller.logout(), true);
+  assertMutationRequest(logout.requests.at(-1), ROUTES.bootstrap, "DELETE");
+  assert.equal(logout.state().authenticated, false);
+
+  const wrongLogout = makeHarness();
+  await load(wrongLogout);
+  wrongLogout.queue.push(
+    new Response(null, { status: 205 }),
+    jsonResponse(snapshot()),
+    jsonResponse({ state: "logged_out" }),
+  );
+  assert.equal(await wrongLogout.controller.logout(), false);
+  assert.equal(
+    wrongLogout.requests.filter(
+      ({ path, init }) => path === ROUTES.bootstrap && init.method === "DELETE",
+    ).length,
+    1,
+  );
+
+  const timeout = makeHarness();
+  await load(timeout);
+  timeout.queue.push(
+    (_path, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(new Error("LATE SECRET")));
+      }),
+    jsonResponse(snapshot()),
+    jsonResponse({ state: "logged_out" }),
+  );
+  const pending = timeout.controller.startDeviceLogin();
+  assert.equal(await timeout.controller.submitPrompt("must not overlap"), false);
+  await timeout.timers.runDelay(15_000);
+  assert.equal(await pending, false);
+  assert.equal(
+    timeout.requests.filter(({ path }) => path === ROUTES.loginDevice).length,
+    1,
+  );
+  assert.equal(timeout.requests.filter(({ path }) => path === ROUTES.turns).length, 0);
+  assert.ok(!JSON.stringify(timeout.states).includes("LATE SECRET"));
+
+  const disposed = makeHarness();
+  await load(disposed);
+  let rejectLate;
+  disposed.queue.push(
+    (_path, init) =>
+      new Promise((_resolve, reject) => {
+        rejectLate = reject;
+        init.signal.addEventListener("abort", () => reject(new Error("DISPOSE SECRET")));
+      }),
+  );
+  const late = disposed.controller.cancelTurn();
+  disposed.controller.dispose();
+  rejectLate?.(new Error("DISPOSE SECRET"));
+  assert.equal(await late, false);
+  assert.equal(
+    disposed.requests.filter(({ path }) => path === ROUTES.turnCancel).length,
+    1,
+  );
+  assert.ok(!JSON.stringify(disposed.states).includes("SECRET"));
+});

@@ -12,6 +12,7 @@ mod routes;
 mod state;
 mod transport;
 mod types;
+mod web;
 mod websocket;
 
 pub use config::{

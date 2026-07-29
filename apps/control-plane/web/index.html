@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codebox operator</title>
+    <link rel="stylesheet" href="/assets/p0.css">
+    <script type="module" src="/assets/p0-app.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <p class="eyebrow">PRIVATE P0 CONTROL</p>
+        <h1>Codebox operator</h1>
+        <p id="connection-status" class="status">Checking this control plane…</p>
+      </header>
+
+      <section id="bootstrap-panel" class="panel">
+        <h2>Authenticate</h2>
+        <p>Enter the private operator bootstrap bearer. It is cleared before the request is sent.</p>
+        <label for="bootstrap-token">Bootstrap bearer</label>
+        <input id="bootstrap-token" type="password" autocomplete="off" spellcheck="false">
+        <button id="authenticate" type="button">Authenticate</button>
+      </section>
+
+      <section id="operator-panel" class="panel" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">SESSION</p>
+            <h2 id="session-status">Unavailable</h2>
+          </div>
+          <button id="refresh" type="button" class="secondary">Refresh status</button>
+        </div>
+
+        <div class="grid">
+          <section class="card">
+            <h3>Codex login</h3>
+            <p id="login-status">Unknown</p>
+            <div class="actions">
+              <button id="start-login" type="button">Start device login</button>
+              <button id="cancel-login" type="button" class="secondary">Cancel login</button>
+            </div>
+            <p id="verification-url" class="mono"></p>
+            <p id="verification-code" class="code"></p>
+          </section>
+
+          <section class="card">
+            <h3>New Cloud turn</h3>
+            <label for="prompt">Prompt</label>
+            <textarea id="prompt" rows="8" autocomplete="off" spellcheck="true"></textarea>
+            <div class="actions">
+              <button id="submit-turn" type="button">Submit turn</button>
+              <button id="cancel-turn" type="button" class="danger">Cancel turn</button>
+            </div>
+          </section>
+        </div>
+
+        <section class="card">
+          <div class="panel-heading">
+            <h3>Ordered activity</h3>
+            <span id="stream-status" class="pill">Disconnected</span>
+          </div>
+          <pre id="event-list" class="timeline">No retained activity in this tab.</pre>
+        </section>
+
+        <section class="card">
+          <div class="panel-heading">
+            <h3>Final diff</h3>
+            <button id="show-diff" type="button" class="secondary">Show diff</button>
+          </div>
+          <pre id="diff-output" class="diff">No diff loaded.</pre>
+        </section>
+
+        <button id="logout" type="button" class="quiet">Log out of Codebox</button>
+      </section>
+
+      <p id="error-message" class="error" role="alert"></p>
+    </main>
+  </body>
+</html>
