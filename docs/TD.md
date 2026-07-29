@@ -1362,7 +1362,7 @@ npm test
 
 The dependency-free P0 T006 page is the narrow exception: it has no TypeScript, package-manager
 dependency, or third-party linter, so its official web gate is
-`node --test apps/control-plane/web/p0-client.test.mjs` under the exact Node version pinned in
+`node --test --test-isolation=none apps/control-plane/web/p0-client.test.mjs` under the exact Node version pinned in
 SPEC-T006 and hosted CI. That suite must import the production modules, inspect the DOM adapter for
 forbidden sinks/authority, and exercise the controller contract. The npm gates remain required for
 the later packaged P1 web application.

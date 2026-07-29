@@ -3965,3 +3965,14 @@ async fn p0_composition_secret_and_disconnect_boundaries_hold() {
     assert_eq!(harness.session.counts(), (1, 0, 0, 0, 1, 0));
     assert_eq!(harness.login.counts(), (0, 1, 0, 0));
 }
+
+macro_rules! web_contract_skeleton {
+    ($name:ident) => {
+        #[test]
+        #[ignore = "T006 contract skeleton"]
+        fn $name() {}
+    };
+}
+
+web_contract_skeleton!(p0_web_serves_exact_embedded_assets_with_security_headers);
+web_contract_skeleton!(p0_web_rejects_unknown_paths_and_methods_without_filesystem_lookup);

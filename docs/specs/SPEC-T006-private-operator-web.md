@@ -397,7 +397,7 @@ per-action atomicity/ambiguity dispositions.
 The official dependency-free command is:
 
 ```text
-node --test apps/control-plane/web/p0-client.test.mjs
+node --test --test-isolation=none apps/control-plane/web/p0-client.test.mjs
 ```
 
 Development and hosted CI use Node 24.18.0. CI installs that exact version with the pinned official
