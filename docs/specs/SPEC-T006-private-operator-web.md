@@ -1,7 +1,7 @@
 ---
 id: SPEC-T006
 title: Private single-page operator flow
-status: ready
+status: accepted
 contract_unit: CU-WEB-P0-01
 module: codebox-control-plane/web
 milestone: P0

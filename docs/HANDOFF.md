@@ -263,8 +263,8 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 ## Next Work
 
 1. Materialize T007 spec-first from TD §§1.7 and 15.0.
-2. Complete deterministic fake-Codex P0 subscription E2E acceptance across the accepted T002–T006
-   surfaces.
+2. Obtain fresh design acceptance, then complete the exact deterministic fake-Codex P0
+   subscription E2E test across the accepted T002–T006 surfaces.
 3. Record the operator-authenticated live smoke only when the required credentials/environment are
    genuinely available; otherwise record it explicitly as gated and unavailable, never as passed.
 
