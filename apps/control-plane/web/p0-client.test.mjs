@@ -981,6 +981,41 @@ test("p0_web_stream_replays_and_reconnects_from_validated_cursor", async () => {
   assert.deepEqual(impossibleEventSocket.closeCalls.at(-1), { code: 1008, reason: "" });
   assert.equal(impossibleEvent.state().error, FIXED.protocol);
 
+  const terminalLatch = makeHarness();
+  const terminalLatchSocket = await load(terminalLatch);
+  terminalLatchSocket.open();
+  terminalLatchSocket.message(frame({ type: "unknown" }));
+  const stateAfterProtocolFailure = terminalLatch.state();
+  const cursorAfterProtocolFailure = terminalLatch.storage.getItem(CURSOR_KEY);
+  terminalLatchSocket.message(
+    frame({
+      type: "replay_begin",
+      session_id: SESSION_ID,
+      after_seq: 0,
+      high_water_seq: 0,
+    }),
+  );
+  terminalLatchSocket.message(
+    frame({
+      type: "snapshot",
+      snapshot: snapshot(),
+      high_water_seq: 0,
+    }),
+  );
+  terminalLatchSocket.message(
+    frame({
+      type: "replay_end",
+      session_id: SESSION_ID,
+      high_water_seq: 0,
+    }),
+  );
+  terminalLatchSocket.message(frame({ type: "event", envelope: envelope(1) }));
+  assert.deepEqual(terminalLatch.state(), stateAfterProtocolFailure);
+  assert.equal(terminalLatch.storage.getItem(CURSOR_KEY), cursorAfterProtocolFailure);
+  assert.equal(terminalLatch.state().connection, "connecting");
+  assert.equal(terminalLatch.state().error, FIXED.protocol);
+  assert.deepEqual(terminalLatchSocket.closeCalls, [{ code: 1008, reason: "" }]);
+
   for (const invalidTaskId of [
     "task_💥",
     "task_\u0000",

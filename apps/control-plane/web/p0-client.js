@@ -1116,7 +1116,8 @@ export function createP0Controller(dependencies) {
     }, delay);
   }
 
-  function streamFailure(policy, message) {
+  function streamFailure(policy, message, streamState) {
+    streamState.phase = "failed";
     socketPolicy = policy;
     state.error = message;
     emit();
@@ -1130,14 +1131,14 @@ export function createP0Controller(dependencies) {
     }
   }
 
-  function handleWsError(frame) {
+  function handleWsError(frame, streamState) {
     const keysAreValid =
       frame?.code === "subscriber_lagged"
         ? exactKeys(frame, ["type", "code", "message"]) ||
           exactKeys(frame, ["type", "code", "message", "latest_available"])
         : exactKeys(frame, expectedWsErrorKeys(frame?.code));
     if (!keysAreValid || !WS_CODES.has(frame.code) || typeof frame.message !== "string") {
-      streamFailure("terminal", MESSAGES.protocol_error);
+      streamFailure("terminal", MESSAGES.protocol_error, streamState);
       return;
     }
     if (
@@ -1151,9 +1152,10 @@ export function createP0Controller(dependencies) {
         !isSeq(frame.latest_available)) ||
       (frame.code === "unsupported_version" && frame.supported_version !== 1)
     ) {
-      streamFailure("terminal", MESSAGES.protocol_error);
+      streamFailure("terminal", MESSAGES.protocol_error, streamState);
       return;
     }
+    streamState.phase = "failed";
     if (frame.code === "authentication_expired") {
       enterBootstrap(MESSAGES.authentication_required);
       return;
@@ -1161,14 +1163,14 @@ export function createP0Controller(dependencies) {
     if (frame.code === "history_gap" || frame.code === "future_cursor" || frame.code === "wrong_session") {
       forceSnapshotCursor = true;
       clearStorage();
-      streamFailure("refresh", MESSAGES.state_changed);
+      streamFailure("refresh", MESSAGES.state_changed, streamState);
       return;
     }
     if (frame.code === "protocol_error" || frame.code === "unsupported_version") {
-      streamFailure("terminal", MESSAGES.protocol_error);
+      streamFailure("terminal", MESSAGES.protocol_error, streamState);
       return;
     }
-    streamFailure("refresh", MESSAGES.stream_waiting);
+    streamFailure("refresh", MESSAGES.stream_waiting, streamState);
   }
 
   function expectedWsErrorKeys(code) {
@@ -1185,23 +1187,26 @@ export function createP0Controller(dependencies) {
   }
 
   function handleFrame(text, streamState) {
+    if (streamState.phase === "failed") {
+      return;
+    }
     if (typeof text !== "string" || encoder.encode(text).length > JSON_LIMIT) {
-      streamFailure("terminal", MESSAGES.protocol_error);
+      streamFailure("terminal", MESSAGES.protocol_error, streamState);
       return;
     }
     let frame;
     try {
       frame = JSON.parse(text);
     } catch (_) {
-      streamFailure("terminal", MESSAGES.protocol_error);
+      streamFailure("terminal", MESSAGES.protocol_error, streamState);
       return;
     }
     if (!frame || typeof frame.type !== "string") {
-      streamFailure("terminal", MESSAGES.protocol_error);
+      streamFailure("terminal", MESSAGES.protocol_error, streamState);
       return;
     }
     if (frame.type === "error") {
-      handleWsError(frame);
+      handleWsError(frame, streamState);
       return;
     }
     if (frame.type === "replay_begin") {
@@ -1213,7 +1218,7 @@ export function createP0Controller(dependencies) {
         !isSeq(frame.high_water_seq) ||
         frame.high_water_seq < frame.after_seq
       ) {
-        streamFailure("terminal", MESSAGES.protocol_error);
+        streamFailure("terminal", MESSAGES.protocol_error, streamState);
         return;
       }
       streamState.phase = "replay";
@@ -1226,16 +1231,16 @@ export function createP0Controller(dependencies) {
         !exactKeys(frame, ["type", "envelope"]) ||
         !validEnvelope(frame.envelope, identity.sessionId)
       ) {
-        streamFailure("terminal", MESSAGES.protocol_error);
+        streamFailure("terminal", MESSAGES.protocol_error, streamState);
         return;
       }
       const envelope = frame.envelope;
       if (streamState.phase === "replay" && envelope.seq > streamState.highWater) {
-        streamFailure("terminal", MESSAGES.protocol_error);
+        streamFailure("terminal", MESSAGES.protocol_error, streamState);
         return;
       }
       if (streamState.phase === "live" && envelope.seq <= streamState.highWater) {
-        streamFailure("terminal", MESSAGES.protocol_error);
+        streamFailure("terminal", MESSAGES.protocol_error, streamState);
         return;
       }
       if (envelope.seq <= lastSeq) {
@@ -1244,7 +1249,7 @@ export function createP0Controller(dependencies) {
       if (envelope.seq !== lastSeq + 1) {
         forceSnapshotCursor = true;
         clearStorage();
-        streamFailure("refresh", MESSAGES.state_changed);
+        streamFailure("refresh", MESSAGES.state_changed, streamState);
         return;
       }
       lastSeq = envelope.seq;
@@ -1267,7 +1272,7 @@ export function createP0Controller(dependencies) {
         frame.snapshot.high_water_seq !== streamState.highWater ||
         lastSeq !== streamState.highWater
       ) {
-        streamFailure("terminal", MESSAGES.protocol_error);
+        streamFailure("terminal", MESSAGES.protocol_error, streamState);
         return;
       }
       applySnapshot(frame.snapshot);
@@ -1282,7 +1287,7 @@ export function createP0Controller(dependencies) {
         frame.session_id !== identity.sessionId ||
         frame.high_water_seq !== streamState.highWater
       ) {
-        streamFailure("terminal", MESSAGES.protocol_error);
+        streamFailure("terminal", MESSAGES.protocol_error, streamState);
         return;
       }
       streamState.phase = "live";
@@ -1292,7 +1297,7 @@ export function createP0Controller(dependencies) {
       emit();
       return;
     }
-    streamFailure("terminal", MESSAGES.protocol_error);
+    streamFailure("terminal", MESSAGES.protocol_error, streamState);
   }
 
   function connect(myGeneration) {
@@ -1326,7 +1331,7 @@ export function createP0Controller(dependencies) {
           }),
         );
       } catch (_) {
-        streamFailure("refresh", MESSAGES.stream_waiting);
+        streamFailure("refresh", MESSAGES.stream_waiting, streamState);
       }
     };
     next.onmessage = (event) => {
