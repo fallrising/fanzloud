@@ -6,6 +6,7 @@ members = [
     "apps/node-agent",
     "crates/codebox-agent-codex",
     "crates/codebox-domain",
+    "crates/codebox-event-store",
     "crates/codebox-session-runtime",
 ]
 resolver = "3"
