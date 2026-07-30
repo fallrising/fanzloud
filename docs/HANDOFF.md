@@ -4,8 +4,8 @@ Date: 2026-07-30
 
 ## Current Goal
 
-Complete T030A acceptance and publication for private SQLite initialization and atomic
-expected-sequence append. Preserve the Accepted T020 schema and private single-operator P0.
+Specify T030B bounded E0 replay over the Accepted T030A SQLite row codec. Preserve the Accepted
+T020 schema and private single-operator P0.
 
 ## Repository State
 
@@ -22,8 +22,9 @@ T020 is Accepted. A fresh read-only Cursor Agent review returned
 `375c3b6`, and `ACCEPT-T020` records the clause-level decision.
 
 T030 was decomposed into T030A append (E1), T030B replay (E0), T030C snapshot load (E0), and T030D
-snapshot save (blocked TD-GAP) because TD §9.3 forbids mixing atomicity models. T030A is Implemented
-locally and `SPEC-T030A` is Verified; fresh acceptance and hosted CI remain pending.
+snapshot save (blocked TD-GAP) because TD §9.3 forbids mixing atomicity models. T030A is Accepted:
+fresh contract and security reviews passed, hosted GitHub Actions run 30554757181 passed
+implementation commit `16b468b`, and `ACCEPT-T030A` records the decision.
 
 ## Accepted Baseline
 
@@ -292,7 +293,8 @@ review returned `COMPOSITION ACCEPTED`, and the parent is Accepted.
   foreign-owner policy. Both were repaired; the rerun returned `CONTRACT ACCEPTED`, and a separate
   Grok transaction/security review returned `SECURITY ACCEPTED`.
 - The 219-test Rust workspace, 10-test Node suite, formatting, workspace Clippy/build,
-  dependency-policy, and diff checks pass locally. Hosted CI and `ACCEPT-T030A` remain pending.
+  dependency-policy, and diff checks pass locally. Hosted run 30554757181 passed implementation
+  commit `16b468b`; `ACCEPT-T030A` records the final accepted decision.
 
 ## Verified Pinned Cloud Surface
 
@@ -325,14 +327,12 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Complete T030A fresh-context acceptance, publish its branch, and require hosted CI before
-   marking it Accepted.
-2. After T030A acceptance, specify T030B bounded E0 replay over the accepted row codec.
-3. Resolve the T030D snapshot-save TD-GAP before T030C/D implementation; do not infer what
+1. Specify T030B bounded E0 replay over the accepted T030A row codec.
+2. Resolve the T030D snapshot-save TD-GAP before T030C/D implementation; do not infer what
    `expected_seq` compares or permit blind retry.
-4. Preserve the Accepted P0 boundary; P1 work must not add a dependency on live P0 provider
+3. Preserve the Accepted P0 boundary; P1 work must not add a dependency on live P0 provider
    availability.
-5. Run a T007 live smoke only in a private environment with all nine administrator variables, the
+4. Run a T007 live smoke only in a private environment with all nine administrator variables, the
    exact pinned Codex CLI `0.145.0`, a supported browser, and an operator-authored low-risk prompt.
    The 2026-07-30 audit found all nine variables absent, Codex CLI `0.146.0`, and no supported
    browser or prompt, so no Cloud task was created.
@@ -396,7 +396,7 @@ All listed T020 commands passed locally. The fresh read-only Cursor Agent review
 `T020 IMPLEMENTATION ACCEPTED`, and hosted GitHub Actions run 30523996895 passed implementation
 commit `375c3b6`. `ACCEPT-T020` records the accepted decision.
 
-For the unaccepted T030A tree, the local 2026-07-30 evidence is:
+For the Accepted T030A tree, the local 2026-07-30 evidence is:
 
 ```text
 node --test --test-isolation=none apps/control-plane/web/p0-client.test.mjs
@@ -413,5 +413,6 @@ cargo deny check
 git diff --check
 ```
 
-All listed T030A commands pass locally. Fresh contract and security reviews are accepted; hosted CI
-and `ACCEPT-T030A` are pending.
+All listed T030A commands pass locally. Fresh contract and security reviews returned accepted,
+hosted GitHub Actions run 30554757181 passed implementation commit `16b468b`, and
+`ACCEPT-T030A` records the accepted decision.

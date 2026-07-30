@@ -18,14 +18,15 @@ the provider-managed environment and never runs beside the local credential dire
 
 ## Current status
 
-The full T001–T007 personal-BYOS path plus the T010 and T020 domain foundations are accepted. The
+The full T001–T007 personal-BYOS path plus the T010, T020, and T030A foundations are accepted. The
 deterministic Linux end-to-end test covers the browser, HTTP and WebSocket APIs, session runtime,
 trusted Codex runner, and a fake provider process. The credential-gated live operator smoke has
 not been run.
 
-P1 development is underway. T030A adds the first SQLite durable-event boundary: private schema
-initialization and atomic expected-sequence append. Replay, snapshots, native agents, local sandbox
-execution, multi-user authentication, and the `node-agent`/`boxd` runtime remain future tasks.
+P1 development is underway. T030A provides the first accepted SQLite durable-event boundary:
+private schema initialization and atomic expected-sequence append. Replay, snapshots, native
+agents, local sandbox execution, multi-user authentication, and the `node-agent`/`boxd` runtime
+remain future tasks.
 
 See [the development handoff](docs/HANDOFF.md) and
 [traceability matrix](docs/traceability.md) for the exact implementation and acceptance state.

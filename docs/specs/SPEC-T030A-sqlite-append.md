@@ -291,7 +291,8 @@ initialization. Both exercise the production transaction and constraints.
 | Focused suite | Passed: 6 unit + 17 integration/property/concurrency/fault/security tests | Local 2026-07-30 run |
 | Workspace/security/fault gates | Passed: 219 Rust, 10 Node, fmt, Clippy, build, dependency policy, diff check | Local 2026-07-30 run |
 | Fresh implementation review | `CONTRACT ACCEPTED` and `SECURITY ACCEPTED` after two evidence blockers were repaired | Fresh read-only Cursor Agent and Grok reviews, 2026-07-30 |
-| Hosted CI | Pending | GitHub Actions |
+| Hosted CI | Passed: `Rust` job in 3m41s on implementation commit `16b468b` | [GitHub Actions run 30554757181](https://github.com/fallrising/fanzloud/actions/runs/30554757181) |
+| Acceptance | Accepted | [`ACCEPT-T030A`](../acceptance/T030A.acceptance.md) |
 
 # Traceability
 
