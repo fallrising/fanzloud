@@ -4,9 +4,9 @@ Date: 2026-07-30
 
 ## Current Goal
 
-Complete T020, the first P1 Batch A boundary: versioned semantic domain events, a deterministic
-session reducer, and durable/ephemeral runtime-event classification. Preserve the Accepted private,
-single-operator P0 and its provider-managed repository-execution boundary.
+Begin T030 spec-first over the Accepted T020 versioned-event and deterministic-reducer boundary.
+Preserve the Accepted private, single-operator P0 and its provider-managed repository-execution
+boundary.
 
 ## Repository State
 
@@ -18,9 +18,9 @@ complete private personal-BYOS P0 slice is Accepted. `ACCEPT-T007` records the f
 spec/test-first history, deterministic composition, fresh-context review, local and hosted
 evidence, and honestly unavailable live-smoke gate.
 
-T020 is Implemented locally and `SPEC-T020` is Verified. A fresh read-only Cursor Agent review
-returned `T020 IMPLEMENTATION ACCEPTED`; hosted CI and the final `ACCEPT-T020` record remain
-pending, so the repository does not yet call the task Accepted.
+T020 is Accepted. A fresh read-only Cursor Agent review returned
+`T020 IMPLEMENTATION ACCEPTED`, hosted GitHub Actions run 30523996895 passed implementation commit
+`375c3b6`, and `ACCEPT-T020` records the clause-level decision.
 
 ## Accepted Baseline
 
@@ -265,7 +265,8 @@ review returned `COMPOSITION ACCEPTED`, and the parent is Accepted.
   all-variant JSON schema locking. Both findings were repaired before the final gates.
 - The 196-test Rust workspace, 10-test Node suite, formatting, Clippy, build, dependency-policy,
   and diff checks pass locally. A fresh read-only Cursor Agent review returned
-  `T020 IMPLEMENTATION ACCEPTED`; hosted CI is still pending.
+  `T020 IMPLEMENTATION ACCEPTED`, and hosted run 30523996895 passed implementation commit
+  `375c3b6`. `ACCEPT-T020` records the final decision.
 
 ## Verified Pinned Cloud Surface
 
@@ -298,13 +299,11 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Publish the T020 branch and require hosted CI before adding `ACCEPT-T020` and marking the task
-   Accepted.
-2. After T020 acceptance, materialize T030 event-store append/replay spec-first; persistence,
+1. Materialize T030 event-store append/replay spec-first; persistence,
    transaction, restart, and replay paging remain explicitly outside T020.
-3. Preserve the Accepted P0 boundary; P1 work must not add a dependency on live P0 provider
+2. Preserve the Accepted P0 boundary; P1 work must not add a dependency on live P0 provider
    availability.
-4. Run a T007 live smoke only in a private environment with all nine administrator variables, the
+3. Run a T007 live smoke only in a private environment with all nine administrator variables, the
    exact pinned Codex CLI `0.145.0`, a supported browser, and an operator-authored low-risk prompt.
    The 2026-07-30 audit found all nine variables absent, Codex CLI `0.146.0`, and no supported
    browser or prompt, so no Cloud task was created.
@@ -347,7 +346,7 @@ The Node suite and the HTTP idempotency, WebSocket reconnect, and WebSocket chun
 partitions each passed 20 consecutive runs. All listed commands passed locally. Hosted CI run
 30423184446 passed the exact T006 code tree.
 
-For the unaccepted T020 tree, the local 2026-07-30 evidence is:
+For the Accepted T020 tree, the local 2026-07-30 evidence is:
 
 ```text
 node --test --test-isolation=none apps/control-plane/web/p0-client.test.mjs
@@ -365,4 +364,5 @@ git diff --check
 ```
 
 All listed T020 commands passed locally. The fresh read-only Cursor Agent review returned
-`T020 IMPLEMENTATION ACCEPTED`; hosted CI and `ACCEPT-T020` are pending.
+`T020 IMPLEMENTATION ACCEPTED`, and hosted GitHub Actions run 30523996895 passed implementation
+commit `375c3b6`. `ACCEPT-T020` records the accepted decision.

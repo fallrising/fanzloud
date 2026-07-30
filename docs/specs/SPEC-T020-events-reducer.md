@@ -327,8 +327,8 @@ malformed serde, and every checked transition failure are injected directly.
 | Failing test skeleton | Failed before production implementation with the fixed `T020 skeleton: not implemented` panic | `cargo test -p codebox-domain --test events_reducer --all-features -- --exact domain_event_envelope_v1_round_trips_without_field_drift` |
 | Focused domain suite | Passed: 1 reducer unit, 10 retained T010 integration tests, 16 T020 integration tests, and 1 compile-fail doctest | Local 2026-07-30 run |
 | Workspace gates | Passed: 196 Rust tests, 10 Node tests, formatting, Clippy, build, dependency policy, and diff check | Local 2026-07-30 run |
-| Hosted CI | Pending | GitHub Actions |
-| Final fresh-context review | `T020 IMPLEMENTATION ACCEPTED`; hosted CI still required before task acceptance | Fresh read-only Cursor Agent review, 2026-07-30 |
+| Hosted CI | Passed on implementation commit `375c3b6` | [GitHub Actions run 30523996895](https://github.com/fallrising/fanzloud/actions/runs/30523996895) |
+| Final fresh-context review | `T020 IMPLEMENTATION ACCEPTED` | [`ACCEPT-T020`](../acceptance/T020.acceptance.md) |
 
 # Traceability
 
