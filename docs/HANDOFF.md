@@ -1,23 +1,26 @@
 # Development Handoff
 
-Date: 2026-07-28
+Date: 2026-07-30
 
 ## Current Goal
 
-Deliver the private, single-operator P0 that lets the project owner operate their own ChatGPT/Codex
-subscription through a Codebox web control layer. Repository-controlled work remains in
-provider-managed Codex Cloud; the local trusted runner must never check out or execute repository
-code beside `CODEX_HOME`.
+Complete T020, the first P1 Batch A boundary: versioned semantic domain events, a deterministic
+session reducer, and durable/ephemeral runtime-event classification. Preserve the Accepted private,
+single-operator P0 and its provider-managed repository-execution boundary.
 
 ## Repository State
 
-Branch: `main`
+Branch: `agent/t020-events-reducer`
 
 T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, T004C, the T004 coordination
 parent, T005A, T005B, T005C, the T005 coordination parent, T006, and T007 are Accepted. The
 complete private personal-BYOS P0 slice is Accepted. `ACCEPT-T007` records the final
 spec/test-first history, deterministic composition, fresh-context review, local and hosted
 evidence, and honestly unavailable live-smoke gate.
+
+T020 is Implemented locally and `SPEC-T020` is Verified. A fresh read-only Cursor Agent review
+returned `T020 IMPLEMENTATION ACCEPTED`; hosted CI and the final `ACCEPT-T020` record remain
+pending, so the repository does not yet call the task Accepted.
 
 ## Accepted Baseline
 
@@ -246,6 +249,24 @@ review returned `COMPOSITION ACCEPTED`, and the parent is Accepted.
 - The live smoke was `not run — credential/environment gate unavailable` because all nine required
   administrator variables were absent. No credentials or provider success were fabricated.
 
+### T020 — versioned events and deterministic reducer
+
+- Added the exact version-1 semantic event envelope and all 14 state-transition payload variants,
+  with strict serde rejection for unknown fields and variants.
+- Added an immutable E0 reducer that enforces first-event creation, same-stream identity, contiguous
+  sequence, supported schema version, every legal TD §4.2 transition, and exact turn/approval
+  identity.
+- Added a total runtime-event classifier that marks semantic domain events durable and the four
+  high-frequency delta classes ephemeral, including the named P7 regression.
+- The compiling, fixed-failure test skeleton ran before production code. The finished boundary has
+  1 reducer unit test, 16 T020 integration/property tests, and retains all 10 T010 tests plus its
+  compile-fail doctest.
+- A focused Cursor review found missing explicit error-precedence evidence and incomplete
+  all-variant JSON schema locking. Both findings were repaired before the final gates.
+- The 196-test Rust workspace, 10-test Node suite, formatting, Clippy, build, dependency-policy,
+  and diff checks pass locally. A fresh read-only Cursor Agent review returned
+  `T020 IMPLEMENTATION ACCEPTED`; hosted CI is still pending.
+
 ## Verified Pinned Cloud Surface
 
 The official `rust-v0.145.0` source and local pinned CLI help establish:
@@ -277,11 +298,16 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Begin the independent P1 Batch A path by materializing T020 spec-first from TD §§15.1 and 16.2.
-2. Preserve the Accepted P0 boundary; P1 work must not add a dependency on live P0 provider
+1. Publish the T020 branch and require hosted CI before adding `ACCEPT-T020` and marking the task
+   Accepted.
+2. After T020 acceptance, materialize T030 event-store append/replay spec-first; persistence,
+   transaction, restart, and replay paging remain explicitly outside T020.
+3. Preserve the Accepted P0 boundary; P1 work must not add a dependency on live P0 provider
    availability.
-3. Run a T007 live smoke only in a later explicitly authorized private environment with all
-   documented credentials and administrator configuration present.
+4. Run a T007 live smoke only in a private environment with all nine administrator variables, the
+   exact pinned Codex CLI `0.145.0`, a supported browser, and an operator-authored low-risk prompt.
+   The 2026-07-30 audit found all nine variables absent, Codex CLI `0.146.0`, and no supported
+   browser or prompt, so no Cloud task was created.
 
 ADR-0004 and the complete T005 decomposition received fresh Cursor Agent design acceptance after
 three rejected drafts repaired durability/authentication, state-transition, cancel/shutdown,
@@ -320,3 +346,23 @@ git diff --check
 The Node suite and the HTTP idempotency, WebSocket reconnect, and WebSocket chunk/reconnect
 partitions each passed 20 consecutive runs. All listed commands passed locally. Hosted CI run
 30423184446 passed the exact T006 code tree.
+
+For the unaccepted T020 tree, the local 2026-07-30 evidence is:
+
+```text
+node --test --test-isolation=none apps/control-plane/web/p0-client.test.mjs
+  10 tests passed
+cargo test -p codebox-domain --all-features
+  1 reducer unit + 10 retained integration + 16 T020 integration + 1 doctest passed
+cargo test --workspace --all-targets --all-features
+  196 tests passed
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo build --workspace --bins --all-features
+cargo deny check
+  advisories ok, bans ok, licenses ok, sources ok
+git diff --check
+```
+
+All listed T020 commands passed locally. The fresh read-only Cursor Agent review returned
+`T020 IMPLEMENTATION ACCEPTED`; hosted CI and `ACCEPT-T020` are pending.
