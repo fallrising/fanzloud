@@ -18,13 +18,14 @@ the provider-managed environment and never runs beside the local credential dire
 
 ## Current status
 
-The full T001–T007 personal-BYOS path and the T010 domain foundation are accepted. The deterministic
-Linux end-to-end test covers the browser, HTTP and WebSocket APIs, session runtime, trusted Codex
-runner, and a fake provider process. The credential-gated live operator smoke has not been run.
+The full T001–T007 personal-BYOS path plus the T010 and T020 domain foundations are accepted. The
+deterministic Linux end-to-end test covers the browser, HTTP and WebSocket APIs, session runtime,
+trusted Codex runner, and a fake provider process. The credential-gated live operator smoke has
+not been run.
 
-P1 remains a target architecture. Native agents, durable event storage, local sandbox execution,
-multi-user authentication, and the `node-agent`/`boxd` runtime are not implemented yet. The next
-documented task is T020, the append-only domain event contract.
+P1 development is underway. T030A adds the first SQLite durable-event boundary: private schema
+initialization and atomic expected-sequence append. Replay, snapshots, native agents, local sandbox
+execution, multi-user authentication, and the `node-agent`/`boxd` runtime remain future tasks.
 
 See [the development handoff](docs/HANDOFF.md) and
 [traceability matrix](docs/traceability.md) for the exact implementation and acceptance state.
@@ -61,6 +62,7 @@ authority.
 | `crates/codebox-session-runtime` | Implemented | One process-lifetime session, one active turn, ordered events, cancel, and recovery |
 | `crates/codebox-agent-codex` | Implemented | Credential scope, device login, pinned Cloud adapter, ledgers, lifecycle, and diff retrieval |
 | `crates/codebox-domain` | Implemented | Strong identifiers, paths, sequences, and base errors |
+| `crates/codebox-event-store` | Implemented | Private SQLite initialization and atomic expected-sequence event append |
 | `apps/node-agent` | Scaffold | Future host sandbox controller |
 | `apps/boxd` | Scaffold | Future in-sandbox process and filesystem service |
 | `apps/codebox-cli` | Scaffold | Future command-line client |

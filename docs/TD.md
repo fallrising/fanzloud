@@ -1595,6 +1595,8 @@ This is the initial P1 contract inventory. The LLM MAY add CUs when a public bou
 | CU-SBX-03 | Sandbox adopt/reconcile | reconciler | E | E1 | INV-009 |
 | CU-EVT-01 | Event append with expected seq | event-store | E | E1 | INV-003, INV-004 |
 | CU-EVT-02 | Event replay after seq | event-store | D | E0 | INV-003 |
+| CU-EVT-03 | Snapshot cache load | event-store | B | E0 | INV-003 |
+| CU-EVT-04 | Snapshot cache save | event-store | E | TBD — T030D TD-GAP | INV-003 |
 | CU-CTX-01 | Build provider request | context-engine | A | E0 | INV-007, INV-008, INV-011 |
 | CU-AGT-01 | Native `run_turn` | agent-native | C+E | E3 | INV-002–INV-006 |
 | CU-SES-01 | Session subscribe/replay/live | session-runtime | D | E0 | INV-003, INV-012 |
@@ -1662,7 +1664,12 @@ flowchart TD
 flowchart TD
     T000[Bootstrap Workspace] --> T010[Domain IDs and Errors]
     T010 --> T020[Events and Reducer]
-    T020 --> T030[SQLite Event Store]
+    T020 --> T030A[SQLite Event Append]
+    T030A --> T030B[Event Replay]
+    T030A --> T030D[Snapshot Save]
+    T030D --> T030C[Snapshot Load]
+    T030B --> T030[SQLite Event Store Parent]
+    T030C --> T030
     T020 --> T040[Session Actor]
 
     T010 --> T050[Node Protocol]
@@ -1723,7 +1730,11 @@ flowchart TD
 | T000 | Cargo workspace, CI, fmt, clippy, deny baseline | — | All apps build; CI green |
 | T010 | Strong IDs and base error taxonomy | T000 | serde round trip, nil rejection, compile-fail type mixup |
 | T020 | Versioned events and deterministic reducer | T010 | property replay determinism and seq rules |
-| T030 | SQLite append/load/snapshot adapter | T020 | conflict, rollback, restart tests |
+| T030A | SQLite initialization and atomic event append | T020 | conflict, rollback, duplicate-ID, and restart tests |
+| T030B | SQLite event replay after sequence | T030A | empty/one/many/limit/order/corruption tests |
+| T030C | SQLite snapshot cache load | T030D | absent/present/stale/corrupt/restart tests |
+| T030D | SQLite snapshot cache save | T030A | Blocked on snapshot atomicity/conflict/retry TD-GAP |
+| T030 | Accepted SQLite event-store coordination parent | T030A,T030B,T030C,T030D | all child acceptances plus append/replay/snapshot composition |
 | T040 | Single-writer session actor | T020 | concurrent turn rejected; approval and restart behavior |
 | T050 | Versioned node and boxd protocols | T010 | codec and version-handshake tests |
 | T060 | Authenticated restricted node-agent skeleton | T050 | control plane has no runtime socket |

@@ -4,13 +4,12 @@ Date: 2026-07-30
 
 ## Current Goal
 
-Begin T030 spec-first over the Accepted T020 versioned-event and deterministic-reducer boundary.
-Preserve the Accepted private, single-operator P0 and its provider-managed repository-execution
-boundary.
+Complete T030A acceptance and publication for private SQLite initialization and atomic
+expected-sequence append. Preserve the Accepted T020 schema and private single-operator P0.
 
 ## Repository State
 
-Branch: `agent/t020-events-reducer`
+Branch: `agent/t030-event-store`
 
 T001, T010, T002A, T002B, T002, T003, T004A, T004A1, T004B, T004C, the T004 coordination
 parent, T005A, T005B, T005C, the T005 coordination parent, T006, and T007 are Accepted. The
@@ -21,6 +20,10 @@ evidence, and honestly unavailable live-smoke gate.
 T020 is Accepted. A fresh read-only Cursor Agent review returned
 `T020 IMPLEMENTATION ACCEPTED`, hosted GitHub Actions run 30523996895 passed implementation commit
 `375c3b6`, and `ACCEPT-T020` records the clause-level decision.
+
+T030 was decomposed into T030A append (E1), T030B replay (E0), T030C snapshot load (E0), and T030D
+snapshot save (blocked TD-GAP) because TD §9.3 forbids mixing atomicity models. T030A is Implemented
+locally and `SPEC-T030A` is Verified; fresh acceptance and hosted CI remain pending.
 
 ## Accepted Baseline
 
@@ -268,6 +271,29 @@ review returned `COMPOSITION ACCEPTED`, and the parent is Accepted.
   `T020 IMPLEMENTATION ACCEPTED`, and hosted run 30523996895 passed implementation commit
   `375c3b6`. `ACCEPT-T020` records the final decision.
 
+### T030 decomposition and T030A — atomic SQLite append
+
+- A fresh read-only design review rejected the undivided T030 seed and accepted the T030A–T030D
+  decomposition. `CU-EVT-03` snapshot load and `CU-EVT-04` snapshot save were added to the CU
+  inventory; T030D records unresolved save conflict/retry/crash semantics instead of inventing
+  them.
+- Added `codebox-event-store` with a private mode-`0600` SQLite file inside a canonical,
+  process-owned private directory, fixed application/schema identity, WAL, FULL sync, and bounded
+  busy wait.
+- Added E1 expected-sequence append under `BEGIN IMMEDIATE`, contiguous full-`u64` big-endian
+  sequence keys, globally unique event IDs, exact version-1 envelope codec, and redacted typed
+  errors.
+- Added exact schema-drift rejection, transaction rollback, duplicate existing ID, two-writer
+  conflict, restart durability, busy timeout, cancelled-future reconciliation, path permission,
+  and payload/error redaction evidence.
+- The compiling fixed-failure skeleton preceded production implementation. The focused suite has
+  6 unit and 17 integration/property/concurrency/fault/security tests.
+- A fresh contract review first blocked missing executable evidence for defensive payload bounds and
+  foreign-owner policy. Both were repaired; the rerun returned `CONTRACT ACCEPTED`, and a separate
+  Grok transaction/security review returned `SECURITY ACCEPTED`.
+- The 219-test Rust workspace, 10-test Node suite, formatting, workspace Clippy/build,
+  dependency-policy, and diff checks pass locally. Hosted CI and `ACCEPT-T030A` remain pending.
+
 ## Verified Pinned Cloud Surface
 
 The official `rust-v0.145.0` source and local pinned CLI help establish:
@@ -299,11 +325,14 @@ subsequently passed a fresh Cursor Agent acceptance review with no blocker.
 
 ## Next Work
 
-1. Materialize T030 event-store append/replay spec-first; persistence,
-   transaction, restart, and replay paging remain explicitly outside T020.
-2. Preserve the Accepted P0 boundary; P1 work must not add a dependency on live P0 provider
+1. Complete T030A fresh-context acceptance, publish its branch, and require hosted CI before
+   marking it Accepted.
+2. After T030A acceptance, specify T030B bounded E0 replay over the accepted row codec.
+3. Resolve the T030D snapshot-save TD-GAP before T030C/D implementation; do not infer what
+   `expected_seq` compares or permit blind retry.
+4. Preserve the Accepted P0 boundary; P1 work must not add a dependency on live P0 provider
    availability.
-3. Run a T007 live smoke only in a private environment with all nine administrator variables, the
+5. Run a T007 live smoke only in a private environment with all nine administrator variables, the
    exact pinned Codex CLI `0.145.0`, a supported browser, and an operator-authored low-risk prompt.
    The 2026-07-30 audit found all nine variables absent, Codex CLI `0.146.0`, and no supported
    browser or prompt, so no Cloud task was created.
@@ -366,3 +395,23 @@ git diff --check
 All listed T020 commands passed locally. The fresh read-only Cursor Agent review returned
 `T020 IMPLEMENTATION ACCEPTED`, and hosted GitHub Actions run 30523996895 passed implementation
 commit `375c3b6`. `ACCEPT-T020` records the accepted decision.
+
+For the unaccepted T030A tree, the local 2026-07-30 evidence is:
+
+```text
+node --test --test-isolation=none apps/control-plane/web/p0-client.test.mjs
+  10 tests passed
+cargo test -p codebox-event-store --all-features
+  6 unit + 17 integration/property/concurrency/fault/security tests passed
+cargo test --workspace --all-targets --all-features
+  219 tests passed
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo build --workspace --bins --all-features
+cargo deny check
+  advisories ok, bans ok, licenses ok, sources ok
+git diff --check
+```
+
+All listed T030A commands pass locally. Fresh contract and security reviews are accepted; hosted CI
+and `ACCEPT-T030A` are pending.
